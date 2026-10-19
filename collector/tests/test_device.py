@@ -48,6 +48,24 @@ def test_read_punches_converts_to_taipei():
     assert punches[0].punched_at.isoformat() == "2026-10-19T07:58:12+08:00"
 
 
+def test_read_punches_skips_records_without_user_number(caplog):
+    fake = FakeZK(attendances=[
+        make_attendance("", datetime(2026, 10, 19, 7, 0)),
+        make_attendance("9021", datetime(2026, 10, 19, 7, 58)),
+    ])
+    with caplog.at_level("WARNING"):
+        with client(fake).session() as s:
+            punches = s.read_punches()
+    assert [p.device_user_no for p in punches] == ["9021"]
+    assert any("1 筆" in r.getMessage() for r in caplog.records)
+
+
+def test_read_users_skips_users_without_number():
+    fake = FakeZK(users=[make_user("", "ghost"), make_user("9021", "Amy")])
+    with client(fake).session() as s:
+        assert [u.device_user_no for u in s.read_users()] == ["9021"]
+
+
 def test_session_always_disconnects_on_error():
     fake = FakeZK(fail_on={"get_attendance": ZKNetworkError("timed out")})
     with pytest.raises(DeviceError):

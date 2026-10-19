@@ -88,15 +88,22 @@ class DeviceSession:
                 self.zk.enable_device()
         else:
             records = self.zk.get_attendance()
-        return [
-            Punch(str(r.user_id), to_taipei(r.timestamp), int(r.status), int(r.punch))
+        # 沒有使用者編號的紀錄無法歸屬，而且雲端會拒收整批，所以略過並記警告
+        punches = [
+            Punch(str(r.user_id).strip(), to_taipei(r.timestamp), int(r.status), int(r.punch))
             for r in records
         ]
+        valid = [p for p in punches if p.device_user_no]
+        if len(valid) < len(punches):
+            log.warning("%s 有 %d 筆打卡沒有使用者編號，已略過", self.host, len(punches) - len(valid))
+        return valid
 
     @_guarded
     def read_users(self) -> list[DeviceUser]:
         users = []
         for u in self.zk.get_users():
+            if not str(u.user_id).strip():
+                continue
             name = u.name
             if name == f"NN-{u.user_id}":  # pyzk 對沒有姓名的使用者自動填的名字
                 name = ""

@@ -88,6 +88,32 @@ class FakeZK:
         return True
 
 
+class FakeUploader:
+    """假的上傳端：記錄每次 send，可依呼叫順序設定要丟出的例外。"""
+
+    def __init__(self, failures=None):
+        self.attempts = 0
+        self.sent = []  # 成功送出的 (serial_no, punches, users)
+        self.failures = list(failures or [])  # 第 N 次呼叫要丟的例外；None 代表成功
+        self.fail_when = None  # (serial_no, punches, users) -> 例外或 None
+        self.inserted_override = None
+
+    def send(self, state, punches=(), users=None):
+        from collector.uploader import IngestResult
+        index = self.attempts
+        self.attempts += 1
+        if index < len(self.failures) and self.failures[index] is not None:
+            raise self.failures[index]
+        if self.fail_when and (exc := self.fail_when(state.serial_no, list(punches), users)):
+            raise exc
+        self.sent.append((state.serial_no, list(punches), None if users is None else list(users)))
+        inserted = len(punches) if self.inserted_override is None else self.inserted_override
+        return IngestResult(1, len(punches), inserted, 0 if users is None else len(users))
+
+    def punches_sent(self, serial_no=None):
+        return [p for s, ps, _ in self.sent if serial_no in (None, s) for p in ps]
+
+
 def fake_factory(fake: FakeZK):
     """回傳可注入 DeviceClient(zk_factory=...) 的 factory，並記下建立參數。"""
     def factory(ip, **kwargs):

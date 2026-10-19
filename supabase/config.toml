@@ -386,6 +386,10 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# 收集器上傳端點：關閉平台的 JWT 驗證，改由函式比對收集器專用金鑰（COLLECTOR_KEY）
+[functions.ingest-punches]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

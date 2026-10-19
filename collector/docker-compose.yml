@@ -1,0 +1,32 @@
+# 打卡收集器：在主機B 常駐執行
+#   啟動／更新：docker compose up -d --build
+#   看 log：    docker compose logs -f
+services:
+  collector:
+    build:
+      context: .
+      target: runtime
+    image: wjcch-collector:latest
+    container_name: wjcch-collector
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: Asia/Taipei
+      DATA_DIR: /data
+    volumes:
+      - ./data:/data
+    extra_hosts:
+      # 本機測試時用 host.docker.internal 連本機 Supabase；Linux 主機也適用
+      - "host.docker.internal:host-gateway"
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      # 每輪成功結束會更新 /data/heartbeat；超過 15 分鐘沒更新就是 unhealthy
+      test: ["CMD", "python", "-c", "import os, sys, time; p = '/data/heartbeat'; sys.exit(0 if os.path.exists(p) and time.time() - os.path.getmtime(p) < 900 else 1)"]
+      interval: 1m
+      timeout: 10s
+      start_period: 2m
