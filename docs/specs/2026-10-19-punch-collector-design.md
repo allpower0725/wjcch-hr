@@ -248,6 +248,7 @@ Supabase Edge Function：ingest-punches（驗證金鑰與格式）
 | `DEVICE_COMM_KEY` | `0` | 卡機通訊密碼，沒設定就是 0 |
 | `DEVICE_TIMEOUT_SECONDS` | `10` | 單一指令逾時秒數 |
 | `DEVICE_FORCE_UDP` | `false` | 階段 0 確認卡機要用 TCP 或 UDP |
+| `DEVICE_ENCODING` | `UTF-8` | 卡機上姓名的文字編碼；階段 0 確認是 UTF-8 還是 Big5（cp950） |
 | `DISABLE_DEVICE_DURING_READ` | `false` | 見 3.1 |
 | `POLL_INTERVAL_SECONDS` | `300` | 輪詢間隔 |
 | `RECONCILE_TIME` | `03:30` | 每日對帳時間（台北） |
