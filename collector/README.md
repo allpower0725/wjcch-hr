@@ -12,6 +12,8 @@
 
 從 2026-10-19 起，正式收集暫時由開發電腦（192.168.230.74）負責，資料夾是 `C:\project\wjcch-hr\collector`。主機B 決定之後，照 [INSTALL.md](INSTALL.md) 安裝並搬過去。
 
+開發電腦下班關機時，收集會跟著暫停，打卡則留在卡機上。隔天開機、Docker Desktop 啟動後，第一輪就會自動補上，不會掉資料，只是雲端會晚幾個小時才有夜間的紀錄。例如 2026-10-19 17:07 關機，隔天 07:44 開機後補上 56 筆。
+
 ## 安裝與搬移
 
 在乾淨的主機上安裝（Windows 或 Linux），以及從開發電腦搬到主機B 的完整步驟，見 [INSTALL.md](INSTALL.md)。
@@ -43,6 +45,56 @@
 INFO collector.jobs 192.168.230.190（3088152000240）紀錄 6354 筆，沒有變動
 INFO collector.jobs 3088152000240 上傳 3 筆，雲端新增 3 筆
 ```
+
+## 人工檢查
+
+建議每天看一次，或懷疑有問題時檢查。
+
+> **時區**：從 2026-10-20 起，Supabase 後台的 Table Editor 和 SQL Editor 都以台灣時間顯示（結尾是 `+08`），和卡機上的時間一致。如果看到結尾是 `+00` 的時間（例如其他工具或 API 回傳的資料），那是 UTC，要加 8 小時才是台灣時間；兩者其實是同一個時間點。下面的 SQL 也已經轉成台灣時間。
+
+### 1. 從雲端看狀態
+
+在 Supabase 後台的 SQL Editor 執行：
+
+```sql
+SELECT d.name AS 卡機,
+       to_char(d.last_seen_at AT TIME ZONE 'Asia/Taipei', 'MM-DD HH24:MI') AS 最後連線,
+       round(extract(epoch FROM now() - d.last_seen_at) / 60) AS 距今分鐘,
+       d.record_count AS 卡機筆數,
+       count(p.*) AS 雲端筆數,
+       to_char(max(p.punched_at) AT TIME ZONE 'Asia/Taipei', 'MM-DD HH24:MI') AS 最新打卡,
+       d.clock_offset_seconds AS 時鐘誤差秒
+  FROM punch_device d
+  LEFT JOIN raw_punch p USING (punch_device_id)
+ GROUP BY d.punch_device_id
+ ORDER BY d.name;
+```
+
+| 欄位 | 正常 | 不正常時怎麼辦 |
+| --- | --- | --- |
+| 距今分鐘 | 10 以內。即使沒有新打卡，收集器每 5 分鐘也會回報一次狀態 | 主機關機或睡眠、Docker 沒啟動，或卡機、網路不通。接著做第 2 步 |
+| 卡機筆數、雲端筆數 | 兩者相同。ZKTime 清掉卡機舊紀錄後，雲端會比較多，這是正常的 | 雲端比較少，而且下一輪仍沒補上：看 log 是否上傳失敗 |
+| 最新打卡 | 上班時段應接近現在 | 夜間沒人打卡時，停在最後一筆是正常的。只有 .190 的時間會比較新也是正常的，.191 多半是下班打卡 |
+| 時鐘誤差秒 | 正負 120 以內 | 請 ZKTime 對卡機校時 |
+
+### 2. 在執行收集器的主機上看
+
+在 `collector/` 資料夾執行：
+
+```powershell
+docker compose ps
+```
+```powershell
+docker compose logs --since 1h
+```
+
+- 狀態要是 `Up … (healthy)`。如果是 `unhealthy` 或根本沒有這個容器，執行 `docker compose up -d`。
+- log 裡出現 `WARNING`、`ERROR` 時，對照下面的「常見問題」。只有 `INFO` 就是正常。
+- 主機剛開機時，第一輪會出現 `下載後新增 N 筆`，那是關機期間的打卡被補上，是正常的。
+
+### 3. 和 ZKTime 報表比對
+
+見本文最後一節「和 ZKTime 報表比對」。
 
 ## 更新程式
 

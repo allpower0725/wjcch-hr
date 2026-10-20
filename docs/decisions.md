@@ -62,4 +62,7 @@
 | `COLLECTOR_KEY` | 已設為 Edge Function secret；與本機測試的金鑰不同。主機B 用的設定檔是開發電腦上的 `collector/.env.production`（不進 git） |
 | `ingest-punches` | 已部署，`verify_jwt = false`；在東京執行。GET 回 405、錯的金鑰回 401、正確金鑰但格式錯誤回 400，測試時沒有寫入任何資料 |
 | 正式收集暫由開發電腦執行 | 主機B 尚未決定，所以 2026-10-19 16:58 起由開發電腦（192.168.230.74）以正式設定常駐收集。首輪上傳 .190 6,356 筆、.191 6,861 筆，雲端筆數與卡機一致，各 88 位使用者的姓名都沒有亂碼 |
+| 增量收集已在正式環境驗證 | 17:03 第二輪抓到新打卡（.190 1 筆、.191 4 筆），當輪就上傳完成；雲端筆數與卡機一致（6,357／6,865），`last_seen_at` 每 5 分鐘更新，容器狀態 healthy |
+| 2026-10-20 檢查「資料停在 10-19 23:55」 | 程式沒有問題。看到的 23:55 是後台以 UTC 顯示的時間，等於台灣 10-20 07:55；查詢當下兩台的雲端筆數都和卡機一致。另外查到開發電腦在 10-19 17:07 從開始功能表關機（快速啟動讓系統紀錄成睡眠），10-20 07:42 開機，07:44 收集器恢復後補上夜間 56 筆。這是暫代主機的限制，主機B 必須 24 小時開機。README 已補上「人工檢查」一節 |
+| 2026-10-20 後台改以台灣時間顯示（migration `20261020005222_set_dashboard_timezone`） | 只對 `postgres` 角色（Supabase 後台與外部工具）設定 `timezone = Asia/Taipei`，後台看到的時間就和卡機一致（`+08`）。資料不變：`timestamptz` 存的是絕對時間點。上傳 API（authenticator）、登入驗證、Edge Functions 維持 UTC，符合 Supabase 建議。附帶影響：以 `postgres` 執行的 pg_cron 排程與 pg_net 的預設時區也是台北；程式仍一律明確寫 `AT TIME ZONE 'Asia/Taipei'`，不依賴這個預設值。還原指令：`ALTER ROLE postgres RESET timezone;` |
 | 搬到主機B 的方式 | 照 `collector/INSTALL.md`：先停開發電腦的收集器，再把整個 `collector` 資料夾（含 `.env` 與 `data`）搬過去並啟動；最後把開發電腦改回本機測試設定（`.env.local`） | 16:12 到 16:36 之間有校時（ZKTime 自動校時或手動）。正式運作後，看 `punch_device.clock_offset_seconds` 和 log 的警告，就能知道誤差會不會再累積 |
