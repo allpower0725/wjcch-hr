@@ -1,5 +1,6 @@
 import threading
 import time
+import json
 from dataclasses import replace
 from datetime import datetime
 
@@ -10,7 +11,7 @@ from collector.runner import run_forever
 
 NOW = to_taipei(datetime(2026, 10, 19, 16, 0))
 FAST = Settings(device_hosts=("192.168.230.190",), poll_interval_seconds=0)
-ENV = {"DEVICE_HOSTS": "192.168.230.190", "INGEST_URL": "http://x", "COLLECTOR_KEY": "k"}
+ENV = {"DEVICE_HOSTS": "192.168.230.190", "LOCAL_DB_PASSWORD_FILE": "/secret"}
 
 
 class FakeCollector:
@@ -72,12 +73,25 @@ def test_no_heartbeat_when_cycle_fails(tmp_path):
     assert not path.exists()
 
 
-def test_main_once_exits_zero_with_fake_collector():
+def test_main_once_exits_zero_with_fake_collector(tmp_path):
     collector, store = FakeCollector(), FakeStore()
-    assert main(["once"], env=ENV, build=lambda settings: (collector, store)) == 0
+    assert main(["once"], env={**ENV, "DATA_DIR": str(tmp_path)}, build=lambda settings: (collector, store)) == 0
     assert collector.calls == 1
     assert store.closed
 
 
 def test_main_config_error_exits_2():
     assert main(["once"], env={}) == 2
+
+
+def test_health_rejects_another_mode_and_failed_cycle(tmp_path):
+    path = tmp_path / "status.json"
+    env = {"DEVICE_HOSTS": "device", "DATA_DIR": str(tmp_path)}
+    from datetime import timezone
+    state = {"mode": "test", "healthy": True, "checked_at": datetime.now(timezone.utc).isoformat()}
+    path.write_text(json.dumps(state))
+    assert main(["health"], env=env) == 0
+    assert main(["health"], env={**env, "COLLECTOR_MODE": "production"}) == 1
+    state["healthy"] = False
+    path.write_text(json.dumps(state))
+    assert main(["health"], env=env) == 1

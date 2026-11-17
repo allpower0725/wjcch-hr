@@ -1,0 +1,42 @@
+# test 專用的獨立設定，不與 production compose 合併載入。
+services:
+  collector:
+    build:
+      context: .
+      target: runtime
+    image: wjcch-collector:hr-modes
+    container_name: wjcch-collector
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: Asia/Taipei
+      DATA_DIR: /data
+      COLLECTOR_PROFILE: test
+      LOCAL_DB_HOST: wjcch
+      LOCAL_DB_PASSWORD_FILE: /run/secrets/collector_database_password
+    volumes:
+      - ./data:/data
+      - type: bind
+        # 來源必須是密碼檔案，不是同名資料夾；相對於 collector 目錄。
+        source: ./.local/database/secrets/hr_collector_local_password
+        target: /run/secrets/collector_database_password
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - local_database
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "python", "-m", "collector", "health"]
+      interval: 1m
+      timeout: 10s
+      start_period: 2m
+networks:
+  local_database:
+    external: true
+    name: wjcch_default

@@ -1,180 +1,112 @@
-# 主機B 安裝步驟（從乾淨的主機開始）
+# 安裝與操作
 
-這份文件說明怎麼在一台全新的主機上裝好打卡收集器，並把目前在開發電腦上執行的收集器搬過去。Windows 和 Linux 都適用；主機確定後，照對應的章節做即可。
+collector 可整個目錄獨立搬移，程式、執行設定、帳密、CA 與 SQLite 佇列都在此目錄內。以下所有指令都在本檔案所在的 `collector/` 目錄執行，直接使用專案原始碼建置。
 
-- **目前狀態**：收集器暫時在開發電腦（192.168.230.74）上執行，資料夾是 `C:\project\wjcch-hr\collector`。
-- **搬移期間不會掉資料**：卡機會保留約半年的紀錄，收集器停機期間的打卡，在新主機啟動後的第一輪就會補上。
+## 安裝準備
 
-## 1. 事前確認
+主機須持續開機、時鐘同步，能連線兩台卡機 TCP 4370，並安裝 Docker 與 Docker Compose。Windows 上 Docker Desktop 必須保持運行。
 
-| 項目 | 需求 |
-| --- | --- |
-| 網路（院內） | 主機B 要能連到兩台卡機的 TCP 4370：192.168.230.190、192.168.230.191 |
-| 網路（對外） | 能用 HTTPS（443）連到 `zakixjdjnwetrvhsqsyg.supabase.co`；不需要開放任何對內的連接埠 |
-| 開機 | 24 小時開機，不睡眠 |
-| 時鐘 | 系統時間要自動校時；收集器用它計算卡機的時鐘誤差 |
-| 硬體 | 需求很低：記憶體約 100 MB；磁碟約 1 GB（大部分是 Docker 映像），資料每年約數十 MB |
-| 作業系統 | Windows 10／11 專業版以上，或 Linux（建議 Ubuntu 24.04 LTS） |
+完整複製 `collector/`，包含 `.env`、`.local/` 與 `data/`，保留以下目錄結構：
 
-**Windows 要注意 Docker Desktop 的授權**：機構員工 250 人以上，或年營收 1,000 萬美元以上，就必須購買付費授權。如果醫院符合其中一項，建議改用 Linux，Linux 的 Docker Engine 免費。
-
-## 2. Windows（Docker Desktop）
-
-### 2-1 安裝 WSL 2 與 Docker Desktop
-
-1. 用「以系統管理員身分執行」開啟 PowerShell，輸入下面的指令，完成後重新開機：
-   ```powershell
-   wsl --install
-   ```
-2. 從 <https://www.docker.com/products/docker-desktop/> 下載 Docker Desktop。安裝時選擇 WSL 2。
-3. 開啟 Docker Desktop，進入 Settings → General，確認勾選：
-   - **Use the WSL 2 based engine**
-   - **Start Docker Desktop when you sign in to your computer**
-4. 開啟 PowerShell 執行下面的指令，能看到版本號就表示安裝完成：
-   ```powershell
-   docker compose version
-   ```
-
-### 2-2 Windows 設定
-
-1. **不睡眠**：用系統管理員 PowerShell 執行下面兩個指令：
-   ```powershell
-   powercfg /change standby-timeout-ac 0
-   ```
-   ```powershell
-   powercfg /change hibernate-timeout-ac 0
-   ```
-2. **自動校時**：設定 → 時間與語言 → 日期和時間，開啟「自動設定時間」。
-3. **重開機後自動恢復**（擇一）：
-   - 設定 Windows 自動登入（例如用微軟的 Sysinternals Autologon 工具）。主機重開後，Docker Desktop 就會自己啟動。主機應放在上鎖的機房。
-   - 不設自動登入：重開機後要有人登入，收集器才會恢復，期間的打卡會在恢復後補上。
-4. **Windows Update**：設定「使用時段」，避免在上班時間自動重開機。
-
-### 2-3 檢查網路
-
-在主機B 的 PowerShell 執行下面三個指令，每一個都應該顯示 `TcpTestSucceeded : True`：
-```powershell
-Test-NetConnection 192.168.230.190 -Port 4370
-```
-```powershell
-Test-NetConnection 192.168.230.191 -Port 4370
-```
-```powershell
-Test-NetConnection zakixjdjnwetrvhsqsyg.supabase.co -Port 443
+```text
+collector/
+  Dockerfile、docker-compose.yml、docker-compose.test.yml、requirements.txt、src/
+  .env.example
+  .env
+  data/
+  .local/database/
+    secrets/hr_collector_supabase_password   production 使用的檔案
+    secrets/hr_collector_local_password      test 使用的檔案
+    certs/supabase-ca.crt                    production 使用的檔案
 ```
 
-### 2-4 從開發電腦搬過來
+production 只需雲端執行密碼及 CA，可省略本機密碼檔；主機能連線 Supabase 的 PostgreSQL session pooler 5432 即可。test 才需要本機 PostgreSQL 容器 `wjcch`、`wjcch_default` 網路及本機執行密碼，可省略雲端密碼與 CA。
 
-1. **在開發電腦停止收集器**，避免兩台同時連卡機：
-   ```powershell
-   cd C:\project\wjcch-hr\collector
-   ```
-   ```powershell
-   docker compose down
-   ```
-2. **把整個 `collector` 資料夾複製到主機B**，例如放在 `D:\wjcch-collector\`。資料夾裡一定要有：
-   - `Dockerfile`、`docker-compose.yml`、`requirements.txt`、`requirements-dev.txt`、`pyproject.toml`
-   - `src\`、`tests\`
-   - `.env`：正式設定，內含上傳金鑰
-   - `data\`：已上傳紀錄；帶過去就不必重新全量上傳
-   - 不需要 `.env.local`：那是開發電腦做本機測試用的設定
+`hr_collector_supabase_password` 是內含既有執行密碼的文字檔，檔名沒有副檔名；`supabase-ca.crt` 也是檔案。它們隨 `collector/.local/` 一起搬移，不包含在 Git 或 Docker 映像中。例如正式機在 `C:\project\collector` 執行，密碼檔就位於 `C:\project\collector\.local\database\secrets\hr_collector_supabase_password`。
 
-   `.env` 內含金鑰。如果用隨身碟搬，複製完要把隨身碟上的副本刪掉。
-3. **在主機B 啟動**：
-   ```powershell
-   cd D:\wjcch-collector
-   ```
-   ```powershell
-   docker compose up -d --build
-   ```
-   第一次會下載 Python 映像和套件，大約需要幾分鐘。
-4. 照第 4 節驗證。
+沿用已建立的資料庫帳密，不重新產生密碼。執行容器以 uid/gid 10001 運行；Linux 上 `data/` 必須可寫，執行密碼檔由 root 持有、群組 10001 唯讀（0440）。Windows 應限制私密檔案的 NTFS 存取權限。資料庫結構由維護環境事先建立，正式機只需這個 collector 目錄。
 
-## 3. Linux（Ubuntu 24.04 LTS）
+## 正式模式安裝與啟動
 
-### 3-1 安裝 Docker Engine
-
-照 Docker 官方文件 <https://docs.docker.com/engine/install/ubuntu/> 的「Install using the apt repository」安裝 `docker-ce` 和 `docker-compose-plugin`。裝好之後設定開機自動啟動：
-```bash
-sudo systemctl enable --now docker
-```
-確認安裝成功：
-```bash
-docker compose version
-```
-
-### 3-2 系統設定
-
-- 自動校時：執行 `timedatectl`，確認 `System clock synchronized: yes`。
-- 伺服器版的 Ubuntu 預設不會睡眠，不需要另外設定。
-
-### 3-3 檢查網路
-
-```bash
-nc -zv 192.168.230.190 4370
-```
-```bash
-nc -zv 192.168.230.191 4370
-```
-```bash
-nc -zv zakixjdjnwetrvhsqsyg.supabase.co 443
-```
-三個都應該顯示 `succeeded`。
-
-### 3-4 從開發電腦搬過來
-
-1. 在開發電腦停止收集器（同 2-4 第 1 步）。
-2. 把 `collector` 資料夾（內容同 2-4 第 2 步）複製到主機B，例如 `/opt/wjcch-collector`。
-3. 設定權限：容器以 uid 10001 執行，`data` 要交給它；`.env` 只讓管理者讀。
-   ```bash
-   cd /opt/wjcch-collector
-   ```
-   ```bash
-   sudo chown -R 10001:10001 data && sudo chmod 600 .env
-   ```
-4. 啟動：
-   ```bash
-   sudo docker compose up -d --build
-   ```
-5. 照第 4 節驗證。
-
-## 4. 驗證
-
-1. **看第一輪的 log**（Linux 的指令前面要加 `sudo`）：
-   ```
-   docker compose logs -f
-   ```
-   - 有帶 `data` 過來：會看到兩台都是 `紀錄 … 筆，沒有變動`。停機期間有新打卡的話，是 `下載後新增 N 筆`，接著是 `上傳 N 筆`。
-   - 沒帶 `data`：會看到全部紀錄重新上傳，`雲端新增 0 筆`（雲端已經有了，會自動去重）。
-
-   確認後按 Ctrl+C 離開，收集器會繼續在背景執行。
-2. **看健康狀態**：約 2 分鐘後執行 `docker compose ps`，狀態應為 `healthy`。
-3. **從雲端確認**：在 Supabase 後台的 SQL Editor 執行下面的查詢，`最後連線` 應該在 5 分鐘以內，`卡機上的筆數` 和 `雲端筆數` 應該一致：
-   ```sql
-   SELECT d.name AS 卡機, d.record_count AS 卡機上的筆數, count(p.*) AS 雲端筆數,
-          d.last_seen_at AT TIME ZONE 'Asia/Taipei' AS 最後連線
-     FROM punch_device d LEFT JOIN raw_punch p USING (punch_device_id)
-    GROUP BY d.punch_device_id ORDER BY d.name;
-   ```
-   ZKTime 清掉卡機上的舊紀錄之後，雲端筆數會比卡機多，這是正常的。
-4. **重開機測試**：重新開機一次。開機後（Windows 是登入後）約 5 分鐘內，`最後連線` 應該再次更新。
-
-## 5. 開發電腦的收尾
-
-確認主機B 正常運作後，把開發電腦改回本機測試的設定。這樣正式金鑰只會留在主機B，開發電腦也不會誤連正式環境。
+1. 首次安裝時將同目錄的 `.env.example` 複製為 `.env`；已有 `.env` 就保留原檔。
+2. 設定 `COLLECTOR_MODE=production`，核對 `CLOUD_DB_*` 與卡機 IP。`LOCAL_DB_*` 不會在此模式使用，也可刪除。
+3. Windows 在本目錄確認密碼與 CA 均為檔案，以下兩行都應回傳 `True`：
 
 ```powershell
-cd C:\project\wjcch-hr\collector
+Test-Path -LiteralPath .\.local\database\secrets\hr_collector_supabase_password -PathType Leaf
+Test-Path -LiteralPath .\.local\database\certs\supabase-ca.crt -PathType Leaf
 ```
+
+4. 確認其他主機的 collector 已停止，再執行：
+
 ```powershell
-Remove-Item .env; Rename-Item .env.local .env; Remove-Item -Recurse data
+docker compose -f docker-compose.yml up -d --build
+docker compose -f docker-compose.yml ps
+docker compose -f docker-compose.yml logs --tail 100
 ```
 
-## 6. 特殊情況
+第一行會直接以目前目錄的程式碼建置並啟動，後兩行用來確認運行狀態與日誌。完成首輪收集後，狀態應顯示 healthy。
 
-- **`data` 遺失或沒帶**：直接啟動即可。收集器會把卡機上的紀錄全部重送一次，雲端會自動去重，不會產生重複資料。
-- **`.env` 遺失**：從 `.env.example` 複製一份成 `.env`，再產生新的上傳金鑰，照 [README](README.md) 的「更換上傳金鑰」設定雲端與 `.env`。
-- **之後主機B 的 IP 改變**：不影響。收集器只會主動對外連線，雲端只認上傳金鑰，不看來源 IP。
-- **卡機的 IP 改變**：修改 `.env` 的 `DEVICE_HOSTS`，再執行 `docker compose up -d`。卡機是用序號識別，所以雲端資料會接續原本的紀錄。
+更新程式時先停止正式機 collector，保留正式機原有 `.env`、`data/` 及正確的執行密碼與 CA，再覆蓋程式檔案並使用同一條 `up -d --build` 指令。不要用開發機的 `data/` 覆蓋正式機佇列。
 
-日常操作、更換金鑰、常見問題，請見 [README](README.md)。
+## 日常操作
+
+| 操作 | production 指令 |
+|---|---|
+| 啟動／更新 | `docker compose -f docker-compose.yml up -d --build` |
+| 停止 | `docker compose -f docker-compose.yml down` |
+| 查看狀態 | `docker compose -f docker-compose.yml ps -a` |
+| 查看日誌 | `docker compose -f docker-compose.yml logs --tail 100` |
+
+需單次補送或讀卡驗證時，先停止常駐 collector，再執行：
+
+```powershell
+# 只補送 SQLite，不連卡機
+docker compose -f docker-compose.yml run --rm --no-deps collector python -m collector sync
+# 讀卡並送出一輪
+docker compose -f docker-compose.yml run --rm --no-deps collector python -m collector once
+```
+
+一次性操作以退出碼與日誌判斷結果；完成後用 `up -d --build` 恢復常駐。`down` 不刪除 `data/`。
+
+## 測試模式與切換
+
+兩種模式共用同一份程式碼，僅連線與掛載設定不同：
+
+| `.env` 的 COLLECTOR_MODE | 使用的設定檔 | 寫入目的地 |
+|---|---|---|
+| `production` | `docker-compose.yml` | Supabase wjcch.hr |
+| `test` | `docker-compose.test.yml` | 本機 PostgreSQL hr |
+
+切換時先用目前模式的設定檔執行 `down`，再修改 `.env` 的 `COLLECTOR_MODE`。例如切換到 test 後：
+
+```powershell
+docker compose -f docker-compose.test.yml up -d --build
+docker compose -f docker-compose.test.yml ps
+docker compose -f docker-compose.test.yml logs --tail 100
+```
+
+test 的其他操作也使用相同指令，只將 `-f` 後的檔名改為 `docker-compose.test.yml`。每次只載入一份設定檔，模式與設定檔不一致時程式會拒絕啟動。
+
+切換模式保留同一份 `data/`；各目的地送達進度分開，尚未送達的紀錄會補送。
+
+## 密碼檔讀取錯誤
+
+密碼檔錯誤會顯示容器內路徑及原因。`檔案不存在` 應核對掛載與所選模式的 `PASSWORD_FILE`；`路徑是目錄` 表示掛載來源成了同名資料夾，應先停止容器、將錯誤資料夾改名保留，再放入正確的密碼檔；`權限不足` 應確認搬移後的檔案可由容器 UID/GID 10001 讀取；`內容為空白` 應補回既有執行帳號的密碼。密碼檔支援 UTF-8（含 Windows BOM）及 CRLF 換行。
+
+production 可在本目錄執行以下指令，檢查身分、設定路徑與掛載權限，輸出不含密碼內容：
+
+```powershell
+docker compose -f docker-compose.yml exec collector sh -c 'id; printenv COLLECTOR_MODE CLOUD_DB_PASSWORD_FILE; ls -ldn /run/secrets /run/secrets/*'
+```
+
+修復掛載或權限後重新執行 `up -d --build`。尚未送達的紀錄保留在 `data/`，不要刪除佇列。
+
+## 搬到另一台主機
+
+1. 在原主機的 `collector/` 目錄使用目前模式的 `down` 指令，確認 collector 已停止。
+2. 停止後備份並搬移完整 `data/`（包含 SQLite 及可能存在的 WAL 檔）、`.env`、所選模式的執行密碼與必要 CA。
+3. 只將整個 `collector/` 目錄搬到新主機，包含 `.env`、`.local/`、`data/`，核對檔案權限。Schema 管理帳密、資料庫維護腳本與開發備份留在維護環境。
+4. 在新主機的 `collector/` 目錄，執行對應模式的 `up -d --build`，檢查狀態與日誌。
+
+兩台主機只能由一台負責收卡。需要回復時，先停止新主機，再恢復原主機；不要清除 SQLite 佇列。

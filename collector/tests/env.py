@@ -13,7 +13,7 @@ from .fakes import FakeUploader, FakeZK, fake_factory, make_attendance, make_use
 A, B = "192.168.230.190", "192.168.230.191"
 SN_A, SN_B = "3088152000240", "3088152000161"
 NOW = to_taipei(datetime(2026, 10, 19, 16, 0))
-SETTINGS = Settings(device_hosts=(A, B), ingest_url="http://x", collector_key="k")
+SETTINGS = Settings(device_hosts=(A, B))
 
 
 def atts(n, start=datetime(2026, 10, 1, 8, 0)):

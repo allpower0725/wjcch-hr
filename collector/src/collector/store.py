@@ -18,10 +18,8 @@ CREATE TABLE IF NOT EXISTS punch (
   verify_type     INTEGER NOT NULL,
   punch_state     INTEGER NOT NULL,
   first_seen_at   TEXT    NOT NULL,
-  uploaded_at     TEXT,
   PRIMARY KEY (serial_no, device_user_no, punched_at)
 );
-CREATE INDEX IF NOT EXISTS ix_punch_pending ON punch (serial_no, punched_at) WHERE uploaded_at IS NULL;
 CREATE TABLE IF NOT EXISTS device_state (
   serial_no             TEXT PRIMARY KEY,
   host                  TEXT    NOT NULL,
@@ -31,8 +29,7 @@ CREATE TABLE IF NOT EXISTS device_state (
   user_count            INTEGER NOT NULL,
   clock_offset_seconds  INTEGER NOT NULL,
   seen_at               TEXT    NOT NULL,
-  users_read_count      INTEGER,
-  users_dirty           INTEGER NOT NULL DEFAULT 0
+  users_read_count      INTEGER
 );
 CREATE TABLE IF NOT EXISTS device_user (
   serial_no       TEXT NOT NULL,
@@ -43,6 +40,20 @@ CREATE TABLE IF NOT EXISTS device_user (
 CREATE TABLE IF NOT EXISTS meta (
   key    TEXT PRIMARY KEY,
   value  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS delivery (
+  destination TEXT NOT NULL, serial_no TEXT NOT NULL,
+  device_user_no TEXT NOT NULL, punched_at TEXT NOT NULL, delivered_at TEXT NOT NULL,
+  PRIMARY KEY (destination, serial_no, device_user_no, punched_at),
+  FOREIGN KEY (serial_no, device_user_no, punched_at)
+    REFERENCES punch(serial_no, device_user_no, punched_at)
+);
+CREATE TABLE IF NOT EXISTS user_snapshot (
+  serial_no TEXT PRIMARY KEY, version INTEGER NOT NULL, captured_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_delivery (
+  destination TEXT NOT NULL, serial_no TEXT NOT NULL, version INTEGER NOT NULL,
+  PRIMARY KEY (destination, serial_no)
 );
 """
 
@@ -58,6 +69,7 @@ class DeviceState:
     clock_offset_seconds: int
     seen_at: datetime
     users_read_count: int | None = None  # 上次讀使用者名單時的人數；從未讀過為 None
+    users_seen_at: datetime | None = None
 
 
 def _punch(row: sqlite3.Row) -> Punch:
@@ -66,12 +78,23 @@ def _punch(row: sqlite3.Row) -> Punch:
 
 
 class Store:
-    def __init__(self, path: Path, clock: Callable[[], datetime] = now_taipei) -> None:
+    def __init__(self, path: Path, clock: Callable[[], datetime] = now_taipei,
+                 destination: str = "unit-test") -> None:
         self._clock = clock
+        self.destination = destination
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
+        # 既有佇列可能只有名單快照，建立版本後即可分別追蹤各目的地送達。
+        with self._conn:
+            self._conn.execute("""INSERT OR IGNORE INTO user_snapshot
+                SELECT serial_no, 1, seen_at FROM device_state WHERE users_read_count IS NOT NULL""")
+
+    def select_destination(self, destination: str) -> None:
+        self.destination = destination
+        self.set_meta("last_destination", destination)
 
     def close(self) -> None:
         self._conn.close()
@@ -79,7 +102,8 @@ class Store:
     # 卡機狀態
 
     def get_device_state(self, serial_no: str) -> DeviceState | None:
-        row = self._conn.execute("SELECT * FROM device_state WHERE serial_no = ?", (serial_no,)).fetchone()
+        row = self._conn.execute("""SELECT d.*, s.captured_at FROM device_state d
+            LEFT JOIN user_snapshot s USING (serial_no) WHERE d.serial_no = ?""", (serial_no,)).fetchone()
         if row is None:
             return None
         return DeviceState(
@@ -87,6 +111,7 @@ class Store:
             firmware_version=row["firmware_version"], record_count=row["record_count"],
             user_count=row["user_count"], clock_offset_seconds=row["clock_offset_seconds"],
             seen_at=datetime.fromisoformat(row["seen_at"]), users_read_count=row["users_read_count"],
+            users_seen_at=datetime.fromisoformat(row["captured_at"]) if row["captured_at"] else None,
         )
 
     def save_status(self, status: DeviceStatus) -> None:
@@ -128,9 +153,11 @@ class Store:
 
     def pending_punches(self, serial_no: str, limit: int) -> list[Punch]:
         rows = self._conn.execute(
-            """SELECT * FROM punch WHERE serial_no = ? AND uploaded_at IS NULL
+            """SELECT p.* FROM punch p WHERE serial_no = ? AND NOT EXISTS
+               (SELECT 1 FROM delivery d WHERE d.destination = ? AND d.serial_no = p.serial_no
+                AND d.device_user_no = p.device_user_no AND d.punched_at = p.punched_at)
                ORDER BY punched_at, device_user_no LIMIT ?""",
-            (serial_no, limit),
+            (serial_no, self.destination, limit),
         )
         return [_punch(r) for r in rows]
 
@@ -138,14 +165,17 @@ class Store:
         now = iso(self._clock())
         with self._conn:
             self._conn.executemany(
-                """UPDATE punch SET uploaded_at = ?
-                   WHERE serial_no = ? AND device_user_no = ? AND punched_at = ?""",
-                ((now, serial_no, x.device_user_no, iso(x.punched_at)) for x in punches),
+                """INSERT OR IGNORE INTO delivery
+                   (destination, serial_no, device_user_no, punched_at, delivered_at) VALUES (?, ?, ?, ?, ?)""",
+                ((self.destination, serial_no, x.device_user_no, iso(x.punched_at), now) for x in punches),
             )
 
     def serials_with_pending(self) -> list[str]:
         rows = self._conn.execute(
-            "SELECT DISTINCT serial_no FROM punch WHERE uploaded_at IS NULL ORDER BY serial_no")
+            """SELECT DISTINCT p.serial_no FROM punch p WHERE NOT EXISTS
+               (SELECT 1 FROM delivery d WHERE d.destination = ? AND d.serial_no = p.serial_no
+                AND d.device_user_no = p.device_user_no AND d.punched_at = p.punched_at)
+               ORDER BY p.serial_no""", (self.destination,))
         return [r[0] for r in rows]
 
     def punches_since(self, serial_no: str, since: datetime) -> list[Punch]:
@@ -167,13 +197,19 @@ class Store:
                 ((serial_no, u.device_user_no, u.name) for u in users),
             )
             self._conn.execute(
-                "UPDATE device_state SET users_dirty = 1, users_read_count = ? WHERE serial_no = ?",
+                "UPDATE device_state SET users_read_count = ? WHERE serial_no = ?",
                 (len(users), serial_no),
             )
+            self._conn.execute("""INSERT INTO user_snapshot VALUES (?, 1, ?)
+                ON CONFLICT (serial_no) DO UPDATE SET version = version + 1, captured_at = excluded.captured_at""",
+                (serial_no, self._clock().isoformat()))
 
     def users_to_sync(self, serial_no: str) -> list[DeviceUser] | None:
-        row = self._conn.execute("SELECT users_dirty FROM device_state WHERE serial_no = ?", (serial_no,)).fetchone()
-        if row is None or not row[0]:
+        row = self._conn.execute("""SELECT s.version FROM user_snapshot s
+            LEFT JOIN user_delivery d ON d.serial_no = s.serial_no AND d.destination = ?
+            WHERE s.serial_no = ? AND (d.version IS NULL OR d.version < s.version)""",
+            (self.destination, serial_no)).fetchone()
+        if row is None:
             return None
         rows = self._conn.execute(
             "SELECT device_user_no, name FROM device_user WHERE serial_no = ? ORDER BY device_user_no",
@@ -183,7 +219,10 @@ class Store:
 
     def clear_users_dirty(self, serial_no: str) -> None:
         with self._conn:
-            self._conn.execute("UPDATE device_state SET users_dirty = 0 WHERE serial_no = ?", (serial_no,))
+            self._conn.execute("""INSERT INTO user_delivery
+                SELECT ?, serial_no, version FROM user_snapshot WHERE serial_no = ?
+                ON CONFLICT (destination, serial_no) DO UPDATE SET version = excluded.version""",
+                (self.destination, serial_no))
 
     # 其他設定
 

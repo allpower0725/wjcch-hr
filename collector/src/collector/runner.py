@@ -2,6 +2,7 @@
 import logging
 import signal
 import threading
+import json
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -38,8 +39,14 @@ def run_forever(collector, settings: Settings, stop: threading.Event,
         except Exception:
             log.exception("這一輪發生未預期的錯誤，下一輪繼續")
         else:
-            if heartbeat_path is not None:
+            if heartbeat_path is not None and getattr(collector, "healthy", True):
                 write_heartbeat(heartbeat_path, clock())
+        if heartbeat_path is not None:
+            state = {"mode": settings.mode, "checked_at": clock().isoformat(),
+                     "healthy": getattr(collector, "healthy", False)}
+            temp = heartbeat_path.with_name("status.json.tmp")
+            temp.write_text(json.dumps(state), encoding="utf-8")
+            temp.replace(heartbeat_path.with_name("status.json"))
         remaining = interval - (monotonic() - started)
         if remaining > 0:
             stop.wait(remaining)

@@ -89,7 +89,7 @@ def test_retryable_error_stops_all_uploads_this_cycle(tmp_path):
 
 
 def test_non_retryable_error_skips_serial_but_keeps_data(tmp_path, caplog):
-    e = Env(tmp_path, failures=[UploadError("HTTP 400", retryable=False, status=400)])
+    e = Env(tmp_path, failures=[UploadError("constraint rejected", retryable=False)])
     with caplog.at_level(logging.ERROR):
         e.collector.run_cycle()
     # 序號排序後 .191（SN_B）先送；它被拒收，資料保留在本機

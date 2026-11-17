@@ -1,6 +1,6 @@
 """收集流程：輪詢卡機、上傳待送紀錄、回報狀態（心跳）。
 
-流程與錯誤處理見 docs/specs/2026-10-19-punch-collector-design.md 第 3、10 節。
+流程與資料契約見 docs/architecture.md。
 """
 import logging
 from collections.abc import Callable, Iterable
@@ -40,6 +40,8 @@ class Collector:
         self._clock = clock
         self._failures: dict[str, int] = {}
         self._upload_blocked = False  # 這一輪遇到可重試的上傳錯誤（例如斷網）
+        self.healthy = False
+        self._sync_ok = False
 
     # 輪詢
 
@@ -86,6 +88,7 @@ class Collector:
     def upload_pending(self) -> set[str]:
         """送出所有待上傳的打卡與名單；回傳這輪有成功送出請求的序號。"""
         self._upload_blocked = False
+        self._sync_ok = True
         sent: set[str] = set()
         size = self._settings.upload_batch_size
         dirty_users = {s for s in self._store.known_serials() if self._store.users_to_sync(s) is not None}
@@ -104,7 +107,7 @@ class Collector:
                     if len(batch) < size:
                         break
                 if total:
-                    log.info("%s 上傳 %d 筆，雲端新增 %d 筆", serial, total, inserted)
+                    log.info("%s 送出 %d 筆，目的地新增 %d 筆", serial, total, inserted)
 
                 users = self._store.users_to_sync(serial)
                 if users is not None:
@@ -113,11 +116,12 @@ class Collector:
                     sent.add(serial)
                     log.info("%s 同步使用者名單 %d 位", serial, result.users_synced)
             except UploadError as exc:
+                self._sync_ok = False
                 if exc.retryable:
-                    log.warning("上傳暫時失敗，資料留在本機，下一輪再送：%s", exc)
+                    log.warning("寫入暫時失敗，資料留在 SQLite，下一輪再送：%s", exc)
                     self._upload_blocked = True
                     return sent
-                log.error("%s 上傳被雲端拒收，資料保留在本機：%s", serial, exc)
+                log.error("%s 目的地拒收，資料保留在 SQLite：%s", serial, exc)
         return sent
 
     def send_heartbeats(self, serials: Iterable[str]) -> None:
@@ -128,6 +132,7 @@ class Collector:
             try:
                 self._uploader.send(state)
             except UploadError as exc:
+                self._sync_ok = False
                 log.warning("%s 狀態回報失敗：%s", serial, exc)
 
     # 每日對帳
@@ -141,7 +146,8 @@ class Collector:
         對帳的強制下載步驟在 run_cycle 的輪詢裡完成，避免同一輪連線兩次。
         """
         now = now.astimezone(TAIPEI)
-        if not self._reconcile_due(now, _RECONCILE_UPLOAD):
+        key = f"{_RECONCILE_UPLOAD}:{self._store.destination}"
+        if not self._reconcile_due(now, key):
             return
         days = self._settings.reconcile_days
         since = datetime.combine(now.date() - timedelta(days=days), time(0), tzinfo=TAIPEI)
@@ -156,17 +162,29 @@ class Collector:
                     inserted += self._uploader.send(state, batch).inserted
                     received += len(batch)
         except UploadError as exc:
+            self._sync_ok = False
             log.warning("每日對帳重送失敗，下一輪再試：%s", exc)
             return
-        self._store.set_meta(_RECONCILE_UPLOAD, now.date().isoformat())
+        self._store.set_meta(key, now.date().isoformat())
         if inserted:
             log.warning("每日對帳：重送近 %d 天 %d 筆，對帳補傳 %d 筆", days, received, inserted)
         else:
-            log.info("每日對帳：重送近 %d 天 %d 筆，雲端沒有缺漏", days, received)
+            log.info("每日對帳：重送近 %d 天 %d 筆，目的地沒有缺漏", days, received)
 
     # 一輪
 
+    def sync_only(self) -> bool:
+        """只補送 SQLite，供切換驗證使用，不連線卡機。"""
+        try:
+            self._store.select_destination(self._uploader.prepare())
+        except UploadError as exc:
+            log.warning("目的地未就緒，SQLite 保留待送資料：%s", exc)
+            return False
+        self.upload_pending()
+        return self._sync_ok
+
     def run_cycle(self) -> list[PollResult]:
+        self.healthy = False
         now = self._clock().astimezone(TAIPEI)
         results = []
         for host in self._settings.device_hosts:
@@ -178,9 +196,16 @@ class Collector:
                 log.info("%s 每日對帳：完整下載與名單同步完成", host)
             results.append(result)
 
+        try:
+            self._store.select_destination(self._uploader.prepare())
+        except UploadError as exc:
+            log.warning("目的地未就緒，本輪資料保留在 SQLite：%s", exc)
+            return results
         sent = self.upload_pending()
         if not self._upload_blocked:
             reached = {r.serial_no for r in results if r.ok and r.serial_no}
             self.send_heartbeats(sorted(reached - sent))
-            self.reconcile_if_due(now)
+            if all(r.ok for r in results):
+                self.reconcile_if_due(now)
+        self.healthy = all(r.ok for r in results) and self._sync_ok
         return results

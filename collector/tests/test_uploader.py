@@ -1,43 +1,21 @@
 from datetime import datetime
+import errno
+from pathlib import Path
 
 import pytest
-import requests
+import psycopg
+from collector.config import Settings
 
 from collector.models import DeviceUser, Punch, to_taipei
 from collector.store import DeviceState
-from collector.uploader import IngestResult, UploadError, Uploader, build_payload
+from collector.uploader import UploadError, Uploader, build_payload
 
-URL = "https://example.supabase.co/functions/v1/ingest-punches"
 STATE = DeviceState(
     serial_no="3088152000240", host="192.168.230.190", model="GT100", firmware_version="Ver 6.60",
     record_count=6354, user_count=88, clock_offset_seconds=-109,
     seen_at=to_taipei(datetime(2026, 10, 19, 16, 10, 57)),
 )
 PUNCH = Punch("9021", to_taipei(datetime(2026, 10, 19, 7, 58, 12)), 1, 0)
-
-
-class FakeResponse:
-    def __init__(self, status_code, body):
-        self.status_code = status_code
-        self._body = body
-        self.text = str(body)
-
-    def json(self):
-        return self._body
-
-
-class FakeSession:
-    def __init__(self, response=None, exc=None):
-        self.response = response or FakeResponse(
-            200, {"punch_device_id": 1, "received": 1, "inserted": 1, "users_synced": 0})
-        self.exc = exc
-        self.requests = []
-
-    def post(self, url, json=None, headers=None, timeout=None):
-        self.requests.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
-        if self.exc:
-            raise self.exc
-        return self.response
 
 
 def test_build_payload_matches_contract():
@@ -68,48 +46,124 @@ def test_hostname_is_not_sent_as_ip_address():
     assert "ip_address" not in build_payload(replace(STATE, host="gt100-a.local"), [], None)["device"]
 
 
-def test_send_sets_headers():
-    session = FakeSession()
-    Uploader(URL, "secret-key", "ap-northeast-1", session=session).send(STATE, [PUNCH])
-    req = session.requests[0]
-    assert req["url"] == URL
-    assert req["headers"]["x-collector-key"] == "secret-key"
-    assert req["headers"]["x-region"] == "ap-northeast-1"
-    assert req["timeout"] == 30
+class Cursor:
+    def __init__(self, row):
+        self.row = row
+
+    def fetchone(self):
+        return self.row
 
 
-def test_no_region_header_when_empty():
-    session = FakeSession()
-    Uploader(URL, "k", "", session=session).send(STATE)
-    assert "x-region" not in session.requests[0]["headers"]
+class Connection:
+    def __init__(self, result=None, instance="instance-a", fail_commit=False):
+        self.result = result or {"punch_device_id": 1, "received": 1, "inserted": 1, "users_synced": 0}
+        self.instance = instance
+        self.fail_commit = fail_commit
+        self.commits = 0
+        self.rollbacks = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, kind, value, tb):
+        if kind:
+            self.rollbacks += 1
+        elif self.fail_commit:
+            raise psycopg.OperationalError("secret connection detail")
+        else:
+            self.commits += 1
+
+    def execute(self, query, args=None):
+        if "collector_target" in query:
+            return Cursor((self.instance, "wjcch_db", "hr_collector"))
+        return Cursor((self.result,))
 
 
-def test_send_returns_result():
-    session = FakeSession(FakeResponse(200, {"punch_device_id": 3, "received": 2, "inserted": 1, "users_synced": 88}))
-    assert Uploader(URL, "k", "", session=session).send(STATE, [PUNCH]) == IngestResult(3, 2, 1, 88)
+def sender(tmp_path, conn):
+    secret = tmp_path / "password"
+    secret.write_text("private-password")
+    settings = Settings(device_hosts=("device",), db_password_file=secret)
+    return Uploader(settings, connect=lambda **kwargs: conn)
 
 
-@pytest.mark.parametrize("status", [500, 502, 503, 429])
-def test_5xx_and_429_are_retryable(status):
-    session = FakeSession(FakeResponse(status, {"error": "x"}))
+@pytest.mark.parametrize("error,reason", [
+    (FileNotFoundError(errno.ENOENT, "private filesystem detail"), "檔案不存在"),
+    (PermissionError(errno.EACCES, "private filesystem detail"), "權限不足"),
+    (IsADirectoryError(errno.EISDIR, "private filesystem detail"), "路徑是目錄"),
+    (OSError(errno.EIO, "private filesystem detail"), "讀取失敗"),
+])
+def test_password_read_failure_identifies_cause_without_connecting(tmp_path, monkeypatch, error, reason):
+    def unreadable(*args, **kwargs):
+        raise error
+    def unexpected_connect(**kwargs):
+        pytest.fail("無法讀取密碼時不應連線資料庫")
+    path = tmp_path / "password"
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    upload = Uploader(Settings(device_hosts=("device",), db_password_file=path), connect=unexpected_connect)
+    with pytest.raises(UploadError) as caught:
+        upload.prepare()
+    assert reason in str(caught.value) and str(path) in str(caught.value)
+    assert "private filesystem detail" not in str(caught.value)
+    assert not caught.value.retryable
+
+
+@pytest.mark.parametrize("content,reason", [(b"\xef\xbb\xbf \r\n", "內容為空白"),
+                                           (b"\xff\xfe", "UTF-8")])
+def test_invalid_password_file_is_reported_without_its_contents(tmp_path, content, reason):
+    path = tmp_path / "password"
+    path.write_bytes(content)
+    upload = Uploader(Settings(device_hosts=("device",), db_password_file=path))
+    with pytest.raises(UploadError, match=reason):
+        upload.prepare()
+
+
+def test_password_file_accepts_windows_utf8_bom_and_crlf(tmp_path):
+    path = tmp_path / "password"
+    path.write_bytes(b"\xef\xbb\xbfprivate-password\r\n")
+    actual = {}
+    def connect(**kwargs):
+        actual.update(kwargs)
+        return Connection()
+    upload = Uploader(Settings(device_hosts=("device",), db_password_file=path), connect=connect)
+    upload.prepare()
+    assert actual["password"] == "private-password"
+
+
+def test_ack_returned_after_commit(tmp_path):
+    conn = Connection()
+    upload = sender(tmp_path, conn)
+    assert upload.prepare() == "test:instance-a"
+    assert upload.send(STATE, [PUNCH]).received == 1
+    assert conn.commits == 2
+
+
+def test_failed_commit_keeps_pending_and_redacts_error(tmp_path):
+    conn = Connection()
+    upload = sender(tmp_path, conn)
+    upload.prepare()
+    conn.fail_commit = True
     with pytest.raises(UploadError) as err:
-        Uploader(URL, "k", "", session=session).send(STATE, [PUNCH])
-    assert err.value.retryable is True
-    assert err.value.status == status
+        upload.send(STATE, [PUNCH])
+    assert err.value.retryable and "secret" not in str(err.value)
 
 
-@pytest.mark.parametrize("exc", [requests.ConnectionError("down"), requests.Timeout("slow")])
-def test_network_errors_are_retryable(exc):
-    with pytest.raises(UploadError) as err:
-        Uploader(URL, "k", "", session=FakeSession(exc=exc)).send(STATE, [PUNCH])
-    assert err.value.retryable is True
-    assert err.value.status is None
+@pytest.mark.parametrize("field,value", [("received", 0), ("inserted", 2),
+    ("punch_device_id", 0), ("users_synced", 1), ("received", True)])
+def test_bad_ack_rolls_back(tmp_path, field, value):
+    conn = Connection()
+    conn.result[field] = value
+    upload = sender(tmp_path, conn)
+    upload.prepare()
+    with pytest.raises(UploadError):
+        upload.send(STATE, [PUNCH])
+    assert conn.rollbacks == 1
 
 
-@pytest.mark.parametrize("status", [400, 401])
-def test_401_and_400_are_not_retryable(status):
-    session = FakeSession(FakeResponse(status, {"error": "bad"}))
-    with pytest.raises(UploadError) as err:
-        Uploader(URL, "k", "", session=session).send(STATE, [PUNCH])
-    assert err.value.retryable is False
-    assert err.value.status == status
+def test_database_replaced_between_prepare_and_send(tmp_path):
+    conn = Connection()
+    upload = sender(tmp_path, conn)
+    upload.prepare()
+    conn.instance = "instance-b"
+    with pytest.raises(UploadError, match="目的地已改變"):
+        upload.send(STATE, [PUNCH])
+    assert upload.prepare() == "test:instance-b"

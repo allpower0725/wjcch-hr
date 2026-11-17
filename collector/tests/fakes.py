@@ -110,6 +110,9 @@ class FakeUploader:
         inserted = len(punches) if self.inserted_override is None else self.inserted_override
         return IngestResult(1, len(punches), inserted, 0 if users is None else len(users))
 
+    def prepare(self):
+        return getattr(self, "destination", "unit-test")
+
     def punches_sent(self, serial_no=None):
         return [p for s, ps, _ in self.sent if serial_no in (None, s) for p in ps]
 

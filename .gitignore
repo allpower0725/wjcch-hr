@@ -1,11 +1,10 @@
-# Node / Supabase CLI
-node_modules/
+# 本機私密設定、備份與封存
+.local/
 
 # 環境變數與金鑰（範本 .env.example 要進 git）
 .env
 .env.*
 !.env.example
-supabase/functions/.env
 
 # 收集器本機資料（SQLite、健康檢查檔）
 collector/data/
