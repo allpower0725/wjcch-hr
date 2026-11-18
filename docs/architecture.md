@@ -38,9 +38,11 @@ production 與 test 共用同一份程式碼及 `.env` 範本，在 `collector/`
 
 ## PostgreSQL
 
-`hr` 包含五張 HR 基礎表、三張打卡業務表及 `collector_target`。`hr` 角色管理該 schema；`hr_collector` 只取得收集所需的 DML、sequence、函式及 RLS 權限，不能讀取員工或預防保健資料，也不能更動原始打卡或建立資料表。
+`hr` 包含人事主檔、組織與主管、職稱與職務、學歷與證照、卡機身分對照、三張打卡業務表及 `collector_target`。`hr` 角色管理該 schema。`hr_collector` 具備收集所需的 DML、sequence、函式及 RLS 權限。
 
 原始打卡以卡機、使用者編號、時間去重。卡機狀態與名單只接受足夠新的觀測時間。使用者從卡機移除時，保留歷史名單，以同步時間判斷當前有效名單。
+
+人事編號與卡機帳號分開保存。`employee_device_mapping` 每台卡機的每個帳號只保留一筆對照。`v_punch_employee` 從 `confirmed_at` 起關聯正式員工，確認前的打卡保留目前候選與 `history_pending`。人事來源及日期規則見 [人事整合](../database/personnel/README.md)。
 
 ## 時間與對帳
 

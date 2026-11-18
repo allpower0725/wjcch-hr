@@ -12,9 +12,9 @@ production 只使用雲端。只有開發／測試及人工維護本機資料庫
 
 `hr` 擁有該 schema、表與 sequence；`hr_collector` 只取得收集所需權限。兩者都沒有 SUPERUSER、CREATEDB、CREATEROLE、REPLICATION 或 BYPASSRLS。
 
-八張業務表為 `job_title`、`employment_type`、`department`、`employee`、`department_manager`、`punch_device`、`raw_punch`、`punch_device_user`。`collector_target` 存放目的地 UUID，migration journal 為 `db_migrations.hr`。
+人事主檔包括部門、員工、職稱、職務、聘用類別、主管、學歷、證照與卡機身分對照。打卡資料另有三張業務表。`collector_target` 存放目的地 UUID，migration journal 為 `db_migrations.hr`。資料關係與證照效期見 [人事整合](personnel/README.md)。
 
-所有業務表啟用 RLS；收集相關 policy 僅授予 hr_collector，五張 HR 基礎表保持拒絕公開存取。批次函式 SECURITY INVOKER，PUBLIC 沒有函式執行權限。
+所有業務表啟用 RLS。收集相關 policy 僅授予 hr_collector，人事表僅限維護角色存取。查詢 view 使用 SECURITY INVOKER，批次寫入函式的執行權限另行授予。
 
 ## 密碼與連線
 
@@ -48,18 +48,18 @@ $adminPasswordFile = Read-Host '本機 db_owner 密碼檔路徑'
 .\scripts\hr-db.ps1 verify-runtime
 ```
 
-`migrate` 使用 `migrations/20261117015429_isolate_hr_schema.sql`；已存在的 schema 必須與 journal checksum 一致，否則停止。SQL 以 `SET LOCAL ROLE hr` 建立應用物件，管理紀錄由 db_owner 維護。已套用版本保留原文；詳見 [migration 規則](migrations/README.md)。
+`migrate` 核對初始化 baseline，再依檔名順序套用尚未記錄的 migration；每個已套用檔案必須與 journal checksum 一致，否則停止。SQL 以 `SET LOCAL ROLE hr` 建立應用物件，extension 等前置作業與管理紀錄由維護角色執行。已套用版本保留原文；詳見 [migration 規則](migrations/README.md)。
 
 | 維護指令 | 行為 |
 |---|---|
 | `configure` | 準備本機私密檔與權限，已有密碼不重新產生 |
-| `migrate` | 建立或核對選定資料庫的 hr baseline |
+| `migrate` | 建立或核對 baseline，並套用缺少的後續 migration |
 | `verify` | 只在 wjcch_db_test 執行合成資料測試，每個案例 rollback |
 | `verify-runtime` | 實際執行帳號的寫入／rollback 與越權拒絕檢查 |
 | `fingerprint` | 唯讀計算 raw_punch 筆數與 SHA-256 |
 | `backup-queue` | 以 SQLite backup API 備份本機佇列，不連卡機或 PostgreSQL |
 
-雲端維護使用 `-Cloud -CloudAdminEnv <私密連線檔> -CloudCa <CA路徑>`。連線檔需有 `MIGRATION_DATABASE_URL`，使用 wjcch 的 db_owner 維護角色；工具拒絕其他專案。雲端初始化前，須先通過相同 baseline 的本機隔離測試。只有 verify 需要測試映像，其餘維護指令使用執行映像。
+雲端維護使用 `-Cloud -CloudAdminEnv <私密連線檔> -CloudCa <CA路徑>`。連線檔需有 `MIGRATION_DATABASE_URL`，使用 wjcch 的 db_owner 維護角色；工具拒絕其他專案。雲端更新前，須先通過相同全部 migration hashes 的本機隔離測試。只有 verify 需要測試映像，其餘維護指令使用執行映像。
 
 ## 台北時區設定
 

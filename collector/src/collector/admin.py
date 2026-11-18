@@ -106,14 +106,33 @@ def verifier(password):
     return f"SCRAM-SHA-256$4096:{enc(salt)}${enc(stored)}:{enc(server)}"
 
 
+def migration_hashes():
+    return {path.stem: hashlib.sha256(path.read_text(encoding="utf-8").encode()).hexdigest()
+            for path in sorted((ROOT / "database/migrations").glob("*.sql"))}
+
+
+def apply_pending_migrations(conn):
+    """Keep the applied baseline immutable and journal each subsequent version."""
+    expected = migration_hashes()
+    recorded = dict(conn.execute("SELECT version, checksum FROM db_migrations.hr").fetchall())
+    for version, checksum in recorded.items():
+        if expected.get(version) != checksum:
+            raise RuntimeError("migration journal 與原始檔不一致，停止操作")
+    for version, checksum in expected.items():
+        if version not in recorded:
+            content = (ROOT / "database/migrations" / f"{version}.sql").read_text(encoding="utf-8")
+            conn.execute(content, prepare=False)
+            conn.execute("INSERT INTO db_migrations.hr(version,checksum) VALUES (%s,%s)", (version, checksum))
+
+
 def migrate(cloud=False, test=False):
     baseline = next((ROOT / "database/migrations").glob("*_isolate_hr_schema.sql"))
     content = baseline.read_text(encoding="utf-8")
     checksum = hashlib.sha256(content.encode()).hexdigest()
     if cloud:
         report = json.loads((PRIVATE / "test-verification.json").read_text())
-        if not report.get("passed") or report.get("migration_sha256") != checksum:
-            raise RuntimeError("須先通過相同 baseline 的本機整合驗證")
+        if not report.get("passed") or report.get("migration_hashes") != migration_hashes():
+            raise RuntimeError("須先通過相同 migration 版本的本機整合驗證")
     suffix = "supabase" if cloud else "local"
     with connect_admin(cloud, test) as conn:
         database = conn.execute("SELECT current_database()").fetchone()[0]
@@ -124,7 +143,8 @@ def migrate(cloud=False, test=False):
             row = conn.execute("SELECT checksum FROM db_migrations.hr WHERE version=%s", (baseline.stem,)).fetchone()
             if not row or row[0] != checksum:
                 raise RuntimeError("hr schema 已存在但 migration 不一致，停止操作")
-            print(f"{database}.hr migration 已一致，無需重做")
+            apply_pending_migrations(conn)
+            print(f"{database}.hr migrations 已核對並套用缺少的版本")
             return
         for role, file_name in (("hr", f"hr_{suffix}_password"),
                                 ("hr_collector", f"hr_collector_{suffix}_password")):
@@ -148,6 +168,7 @@ def migrate(cloud=False, test=False):
         conn.execute(content, prepare=False)
         conn.execute("RESET ROLE")
         conn.execute("INSERT INTO db_migrations.hr(version,checksum) VALUES (%s,%s)", (baseline.stem, checksum))
+        apply_pending_migrations(conn)
         for role in ("hr", "hr_collector"):
             conn.execute(sql.SQL("ALTER ROLE {} IN DATABASE {} SET search_path TO pg_catalog, hr")
                          .format(sql.Identifier(role), sql.Identifier(database)))
@@ -247,13 +268,14 @@ def main():
             if args.cloud:
                 raise RuntimeError("verify 僅執行本機隔離測試")
             result = subprocess.run([sys.executable, "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                                     "tests/test_postgres.py"], cwd=ROOT / "collector",
+                                     "tests/test_postgres.py", str(ROOT / "database/tests")], cwd=ROOT / "collector",
                                     env={**os.environ, "HR_INTEGRATION": "1"})
             if result.returncode:
                 return result.returncode
             baseline = next((ROOT / "database/migrations").glob("*_isolate_hr_schema.sql"))
             write_private(PRIVATE / "test-verification.json", json.dumps({"passed": True,
                 "migration_sha256": hashlib.sha256(baseline.read_bytes()).hexdigest(),
+                "migration_hashes": migration_hashes(),
                 "verified_at": now_taipei().isoformat()}, indent=2))
         else:
             migrate(args.cloud, args.test)
