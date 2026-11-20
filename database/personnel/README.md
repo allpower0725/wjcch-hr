@@ -15,6 +15,8 @@
 
 P/H 人事編號存於 `employee_no`，卡機帳號另存於 `employee_device_mapping`。`zk_user_id` 保留舊軟體 USERID。市話、手機與卡機帳號均以字串保留前導零。
 
+院內通訊錄的個人分機存於 `employee.phone_ext`，單位分機存於 `department.phone_ext`。個人分機可留空，也可多人共用。
+
 ## 日期與狀態
 
 - 到職日與主管任期開始日可留空；主管 `recorded_on` 是現況登錄日，不代替任期開始日。
