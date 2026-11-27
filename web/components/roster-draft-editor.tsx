@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState, type FormEvent, type ReactNode } from "react"
+import { useMemo, useState, useTransition, type FormEvent, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { AlertDialog, AlertDialogClose, AlertDialogContent, AlertDialogDescription, AlertDialogTitle, AlertDialogTrigger } from "@ui-sdk/react/alert-dialog"
 import { Button } from "@ui-sdk/react/button"
@@ -18,6 +18,7 @@ import {
   rosterEntrySummary, segmentRanges, shortRosterDate, workWindow, type RosterView,
 } from "../lib/roster-calendar"
 import { rosterSegmentError, validRosterDate, validRosterMonth, type RosterDraft, type RosterEntry, type RosterSegment } from "../lib/roster-draft"
+import { LoadingFeedback } from "./loading-state"
 import { RosterDateDetails, RosterMonthlyHours, RosterTimeTrack, RosterWeek } from "./roster-overview"
 import { RosterUnitSelect } from "./roster-unit-select"
 import panel from "./roster-workspace.module.css"
@@ -41,6 +42,7 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
   initialPerson?: number
 }) {
   const router = useRouter()
+  const [monthPending, startMonthNavigation] = useTransition()
   const [employeeId, setEmployeeId] = useState(() =>
     people.find((person) => person.employeeId === initialPerson)?.employeeId ??
     people.find((person) => person.employeeId === viewerId)?.employeeId ?? people[0]?.employeeId,
@@ -73,17 +75,18 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
   }
 
   function navigate(date: string) {
-    if (!validRosterDate(date)) return
+    if (monthPending || !validRosterDate(date)) return
     if (date.startsWith(month + "-")) {
       setActiveDate(date)
       return
     }
     const query = new URLSearchParams({ unit: String(unit.id), month: date.slice(0, 7), date, view })
     if (employeeId) query.set("person", String(employeeId))
-    router.push(`/roster?${query}`, { scroll: false })
+    startMonthNavigation(() => router.push(`/roster?${query}`, { scroll: false }))
   }
 
   function changeMonth(target: string) {
+    if (monthPending) return
     if (!validRosterMonth(target)) {
       setMonthIssue("請輸入有效的班表月份，例如 2026-11。")
       return
@@ -101,6 +104,7 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
   }
 
   function calendarChanged(value: string | string[] | null) {
+    if (monthPending) return
     if (batch) {
       setBatchDates(Array.isArray(value) ? value.filter((date) =>
         date.startsWith(month + "-") && (batch !== "delete" || personDays?.has(date)),
@@ -165,6 +169,7 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
 
   return (
     <>
+      <LoadingFeedback message={monthPending ? "正在載入班表…" : undefined} />
       <header className={panel.pageHeader}>
         {back}
         <h1 className={panel.title}>月班表編輯</h1>
@@ -173,7 +178,7 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
       <div className={styles.unitControl}>
         <RosterUnitSelect units={units} selectedId={unit.id} month={month} date={activeDate} view={view} />
       </div>
-      <div className={styles.surface} data-view={view}>
+      <div className={styles.surface} data-view={view} aria-busy={monthPending}>
         <section className={panel.panel} aria-label="選擇排班日期">
           <SegmentedControl aria-label="班表檢視方式" className={styles.switch}
             value={editMode ? "edit" : "overview"} onValueChange={(value) => {
@@ -188,10 +193,11 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
             <Field className={styles.monthField}>
               <FieldLabel className="sr-only">班表月份</FieldLabel>
               <div className={styles.monthNav}>
-                <Button className={styles.navButton} aria-label="上個月" disabled={!validRosterMonth(monthPrevious)}
+                <Button className={styles.navButton} aria-label="上個月" disabled={monthPending || !validRosterMonth(monthPrevious)}
+                  focusableWhenDisabled={monthPending}
                   onClick={() => changeMonth(monthPrevious)}><ChevronLeft size={20} aria-hidden="true" /></Button>
                 <Input className={styles.monthInput} type="month" name="month" min="1000-01" max="9999-12"
-                  value={monthInput} placeholder="YYYY-MM" aria-invalid={Boolean(monthIssue)}
+                  value={monthInput} readOnly={monthPending} placeholder="YYYY-MM" aria-invalid={Boolean(monthIssue)}
                   aria-describedby={monthIssue ? "roster-month-error" : undefined}
                   onChange={(event) => {
                     const input = event.currentTarget
@@ -203,7 +209,8 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
                     if ((input.type === "text" && input.value !== month) || !validRosterMonth(input.value)) changeMonth(input.value)
                   }}
                   onKeyDown={(event) => { if (event.key === "Enter" && event.currentTarget.type === "text") changeMonth(event.currentTarget.value) }} />
-                <Button className={styles.navButton} aria-label="下個月" disabled={!validRosterMonth(monthNext)}
+                <Button className={styles.navButton} aria-label="下個月" disabled={monthPending || !validRosterMonth(monthNext)}
+                  focusableWhenDisabled={monthPending}
                   onClick={() => changeMonth(monthNext)}><ChevronRight size={20} aria-hidden="true" /></Button>
               </div>
             </Field>
@@ -251,7 +258,7 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
               <p className={styles.personProgress}>{draft ? `${filled}/${monthDays.length} 日已填 · 點日期編輯` : "草稿儲存尚未啟用"}</p>
             </div>
           )}
-          {weekly ? <RosterWeek date={activeDate} people={people} days={grouped} selectDate={navigate} /> : (
+          {weekly ? <RosterWeek date={activeDate} people={people} days={grouped} navigationPending={monthPending} selectDate={navigate} /> : (
             <Calendar key={batch ?? view} mode={batch ? "multiple" : "single"} month={month}
               value={datesValue} locale="zh-TW" weekdayFormat="narrow" showOutsideDays={false}
               unavailable={batch === "delete" ? monthDays.filter((date) => !personDays?.has(date)) : undefined}

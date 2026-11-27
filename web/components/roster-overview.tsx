@@ -11,10 +11,11 @@ import { validRosterDate } from "../lib/roster-draft"
 import panel from "./roster-workspace.module.css"
 import styles from "./roster-draft.module.css"
 
-export function RosterWeek({ date, people, days, selectDate }: {
+export function RosterWeek({ date, people, days, navigationPending, selectDate }: {
   date: string
   people: RosterPerson[]
   days: RosterDays
+  navigationPending: boolean
   selectDate(date: string): void
 }) {
   const week = weekDates(date)
@@ -22,7 +23,7 @@ export function RosterWeek({ date, people, days, selectDate }: {
   const next = offsetDate(date, 7)
   const dateButton = (day: string) => (
     <Button key={day} className={styles.dayLink} aria-label={rosterDateLabel(day)} aria-pressed={day === date}
-      disabled={!validRosterDate(day)} onClick={() => selectDate(day)}>
+      disabled={navigationPending || !validRosterDate(day)} focusableWhenDisabled={navigationPending} onClick={() => selectDate(day)}>
       <span>{"日一二三四五六"[dateWeekday(day)]}</span>
       <span className={styles.weekDayDate}>{shortRosterDate(day)}</span>
     </Button>
@@ -30,11 +31,13 @@ export function RosterWeek({ date, people, days, selectDate }: {
   return (
     <section className={styles.weekSection} aria-label="每週班表">
       <div className={styles.weekNav}>
-        <Button className={styles.navButton} aria-label="上一週" disabled={!validRosterDate(previous)} onClick={() => selectDate(previous)}>
+        <Button className={styles.navButton} aria-label="上一週" disabled={navigationPending || !validRosterDate(previous)}
+          focusableWhenDisabled={navigationPending} onClick={() => selectDate(previous)}>
           <ChevronLeft size={22} aria-hidden="true" />
         </Button>
         <h3 className={styles.monthHeading}>{shortRosterDate(week[0])}–{shortRosterDate(week[6])}</h3>
-        <Button className={styles.navButton} aria-label="下一週" disabled={!validRosterDate(next)} onClick={() => selectDate(next)}>
+        <Button className={styles.navButton} aria-label="下一週" disabled={navigationPending || !validRosterDate(next)}
+          focusableWhenDisabled={navigationPending} onClick={() => selectDate(next)}>
           <ChevronRight size={22} aria-hidden="true" />
         </Button>
       </div>
