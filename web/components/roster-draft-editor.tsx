@@ -237,8 +237,10 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
                     setBatchDates([])
                     setStatus("")
                   }}>
-                  <SelectLabel className={panel.label}>排班人員</SelectLabel>
-                  <SelectTrigger className={styles.select}><SelectValue className={panel.value} /><ChevronDown size={20} aria-hidden="true" /></SelectTrigger>
+                  <SelectLabel className={`${panel.label} ${styles.personLabel}`}>排班人員</SelectLabel>
+                  <SelectTrigger className={`${styles.select} ${styles.personTrigger}`}>
+                    <SelectValue className={panel.triggerValue} /><ChevronDown size={20} aria-hidden="true" />
+                  </SelectTrigger>
                   <SelectContent className={panel.options} sideOffset={8}>
                     {people.map((person) => (
                       <SelectItem key={person.employeeId} value={String(person.employeeId)} className={panel.option}>
@@ -344,9 +346,10 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
           <div className={styles.dialogStack}>
             <DialogTitle className={styles.dialogTitle}>{batch ? "批次新增班次" : initialShift ? "編輯班次" : "新增班次"}</DialogTitle>
             <DialogDescription className={styles.description}>
-              {employee?.name} · {batch ? `${editorDates.length} 個選取日期` : editorDates[0] && rosterDateLabel(editorDates[0])}
+              {unit.name} · {employee?.name} · {batch ? `${editorDates.length} 個選取日期` : editorDates[0] && rosterDateLabel(editorDates[0])}
             </DialogDescription>
             {editorDates.length > 0 && <ShiftForm key={editorDates.join(",")} initial={initialShift} saving={saving} dirty={dirty}
+              date={batch ? undefined : editorDates[0]}
               batch={batch === "add"} canContinue={!batch && offsetDate(editorDates[0], 1).startsWith(month + "-")}
               markDirty={() => { setDirty(true); setDismissMessage("") }} save={saveFromEditor} dismissMessage={dismissMessage} />}
           </div>
@@ -377,11 +380,12 @@ function BatchGuide({ kind, disabled, start }: { kind: BatchMode; disabled: bool
   )
 }
 
-function ShiftForm({ initial, saving, dirty, batch, canContinue, markDirty, save, dismissMessage }: {
+function ShiftForm({ initial, saving, dirty, batch, date, canContinue, markDirty, save, dismissMessage }: {
   initial?: RosterEntry
   saving: boolean
   dirty: boolean
   batch: boolean
+  date?: string
   canContinue: boolean
   markDirty(): void
   save(entry: RosterEntry | null, next: boolean, overwrite: boolean): Promise<string | undefined>
@@ -422,9 +426,16 @@ function ShiftForm({ initial, saving, dirty, batch, canContinue, markDirty, save
     <form className={styles.form} method="post" action="/api/roster/draft" onSubmit={submit}>
       <div className={styles.fields}>
         {initial && (
-          <div className={styles.savedShift}>
-            <strong>目前班次</strong>
-            <span>{initial.kind === "work" ? `工作班 · ${rosterEntrySummary(initial)}` : rosterEntrySummary(initial)}</span>
+          <div className={`${styles.savedShift} ${styles.currentShift}`}>
+            <div>
+              <strong>目前班次</strong>
+              <p>{initial.kind === "work" ? `工作班 · ${rosterEntrySummary(initial)}` : rosterEntrySummary(initial)}</p>
+            </div>
+            <Button className={styles.clearShift} disabled={saving} onClick={async () => {
+              setError("")
+              const problem = await save(null, false, false)
+              if (problem) setError(problem)
+            }}>清為未排</Button>
           </div>
         )}
         <Select items={shiftTypes} value={kind} name="kind" presentation="auto" onValueChange={(value) => {
@@ -452,8 +463,8 @@ function ShiftForm({ initial, saving, dirty, batch, canContinue, markDirty, save
             {segments.map((segment, index) => (
               <fieldset className={styles.segment} key={segment.key}>
                 <legend>第 {index + 1} 段</legend>
-                <TimeFields kind="start" index={index} segment={segment} change={(value) => changeSegment(segment.key, value)} />
-                <TimeFields kind="end" index={index} segment={segment} change={(value) => changeSegment(segment.key, value)} />
+                <TimeFields kind="start" index={index} date={date} segment={segment} change={(value) => changeSegment(segment.key, value)} />
+                <TimeFields kind="end" index={index} date={date} segment={segment} change={(value) => changeSegment(segment.key, value)} />
                 {segments.length > 1 && <Button className="text-link" onClick={() => {
                   markDirty()
                   setSegments((items) => items.filter((item) => item.key !== segment.key))
@@ -475,43 +486,53 @@ function ShiftForm({ initial, saving, dirty, batch, canContinue, markDirty, save
         </Field>}
         {(error || dismissMessage) && <p className="notice error" role="alert">{error || dismissMessage}</p>}
       </div>
-      <div className={styles.actions}>
-        {initial && <Button className={styles.danger} disabled={saving} onClick={async () => {
-          setError("")
-          const problem = await save(null, false, false)
-          if (problem) setError(problem)
-        }}>清為未排</Button>}
-        <DialogClose render={<Button />} className={styles.cancel} disabled={saving}>{dirty ? "放棄變更" : "取消"}</DialogClose>
-        <Button className={`button primary ${styles.saveAction}`} type="submit" value="save" disabled={saving}>
+      <div className={styles.formActions}>
+        <DialogClose render={<Button />} className={styles.shiftCancel} disabled={saving}>{dirty ? "放棄變更" : "取消"}</DialogClose>
+        <Button className={styles.saveAction} type="submit" value="save" disabled={saving}>
           {saving ? "儲存中…" : "儲存班次"}
         </Button>
-        {canContinue && <Button className={styles.secondary} type="submit" value="next" disabled={saving}>儲存並編下一日</Button>}
+        {canContinue && <Button className={styles.saveNextAction} type="submit" value="next" disabled={saving}>儲存並編下一日</Button>}
       </div>
     </form>
   )
 }
 
-function TimeFields({ kind, index, segment, change }: {
+function TimeFields({ kind, index, date, segment, change }: {
   kind: "start" | "end"
   index: number
+  date?: string
   segment: RosterSegment
   change(value: Partial<RosterSegment>): void
 }) {
   const title = kind === "start" ? "開始" : "結束"
   const nextDay = kind === "start" ? "startNextDay" : "endNextDay"
+  const dates = [
+    { value: "same", label: date ? `${shortRosterDate(date)} 當日` : "當日" },
+    { value: "next", label: date ? `${shortRosterDate(offsetDate(date, 1))} 次日` : "次日" },
+  ]
   return (
     <div className={styles.timeGroup}>
+      <span className={styles.timeLabel} aria-hidden="true">{title}時間</span>
+      <Select items={dates} value={segment[nextDay] ? "next" : "same"} name={`${nextDay}-${index}`}
+        presentation="popover" onValueChange={(value) => {
+          if (value === "same" || value === "next") change({ [nextDay]: value === "next" })
+        }}>
+        <SelectLabel className="sr-only">{title}日期，第 {index + 1} 段</SelectLabel>
+        <SelectTrigger className={`${styles.select} ${styles.dateSelect}`}>
+          <SelectValue /><ChevronDown size={16} aria-hidden="true" />
+        </SelectTrigger>
+        <SelectContent className={panel.options} sideOffset={4}>
+          {dates.map((item) => (
+            <SelectItem key={item.value} value={item.value} className={panel.option}>
+              {item.label}<SelectItemIndicator className={panel.indicator}><Check size={16} aria-hidden="true" /></SelectItemIndicator>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       <Field>
-        <FieldLabel className={styles.timeLabel}>{title}時間</FieldLabel>
+        <FieldLabel className="sr-only">{title}時間，第 {index + 1} 段</FieldLabel>
         <Input className={styles.time} type="time" name={`${kind}-${index}`} value={segment[kind]}
           onChange={(event) => change({ [kind]: event.target.value })} required />
-      </Field>
-      <Field className={styles.nextDay}>
-        <Checkbox name={`${nextDay}-${index}`} checked={segment[nextDay]}
-          onCheckedChange={(checked) => change({ [nextDay]: checked === true })}>
-          <CheckboxIndicator><Check size={16} aria-hidden="true" /></CheckboxIndicator>
-        </Checkbox>
-        <FieldLabel>{title}為次日</FieldLabel>
       </Field>
     </div>
   )

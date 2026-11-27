@@ -35,7 +35,7 @@ export function RosterWeek({ date, people, days, navigationPending, selectDate }
           focusableWhenDisabled={navigationPending} onClick={() => selectDate(previous)}>
           <ChevronLeft size={22} aria-hidden="true" />
         </Button>
-        <h3 className={styles.monthHeading}>{shortRosterDate(week[0])}–{shortRosterDate(week[6])}</h3>
+        <h3 className={styles.weekRange}>{shortRosterDate(week[0])}–{shortRosterDate(week[6])}</h3>
         <Button className={styles.navButton} aria-label="下一週" disabled={navigationPending || !validRosterDate(next)}
           focusableWhenDisabled={navigationPending} onClick={() => selectDate(next)}>
           <ChevronRight size={22} aria-hidden="true" />
