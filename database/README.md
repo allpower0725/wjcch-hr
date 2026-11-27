@@ -54,12 +54,23 @@ $adminPasswordFile = Read-Host '本機 db_owner 密碼檔路徑'
 |---|---|
 | `configure` | 準備本機私密檔與權限，已有密碼不重新產生 |
 | `migrate` | 建立或核對 baseline，並套用缺少的後續 migration |
-| `verify` | 只在 wjcch_db_test 執行合成資料測試，每個案例 rollback |
+| `verify` | 只在 `wjcch_db_test` 執行合成資料測試。一般案例 rollback，跨連線的 LINE 綁定測試會提交合成資料並在結束時清除 |
 | `verify-runtime` | 實際執行帳號的寫入／rollback 與越權拒絕檢查 |
 | `fingerprint` | 唯讀計算 raw_punch 筆數與 SHA-256 |
 | `backup-queue` | 以 SQLite backup API 備份本機佇列，不連卡機或 PostgreSQL |
 
 雲端維護使用 `-Cloud -CloudAdminEnv <私密連線檔> -CloudCa <CA路徑>`。連線檔需有 `MIGRATION_DATABASE_URL`，使用 wjcch 的 db_owner 維護角色；工具拒絕其他專案。雲端更新前，須先通過相同全部 migration hashes 的本機隔離測試。只有 verify 需要測試映像，其餘維護指令使用執行映像。
+
+## 初始系統管理者
+
+套用系統管理者授權 migration 並確認本機驗收後，由具授權的資料庫維護人員執行。先確認目標資料庫、員編與員工的有效 LINE 綁定。以下為本機主庫指定 `P271` 的指令。
+
+```powershell
+Get-Content -Raw -Encoding UTF8 database/tools/initialize-system-admin.sql |
+  docker exec -i wjcch psql -X -w -U db_owner -d wjcch_db -v employee_no=P271
+```
+
+授權記錄以 `employee_id` 關聯，包含授權來源、時間與資料庫維護身分。重跑會保留同一筆有效的初始授權。若初始授權已撤銷，交接或復原由受授權的維護人員在交易中記錄撤銷時間與維護身分，核對接任員工的有效 LINE 綁定，再以 `maintenance` 來源新增授權。保留原有記錄供查核。
 
 ## 台北時區設定
 

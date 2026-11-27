@@ -1,5 +1,7 @@
 # 本機私密設定、備份與封存
 .local/
+# 本機agents設定
+.agents/
 
 # 環境變數與金鑰（範本 .env.example 要進 git）
 .env
@@ -13,3 +15,11 @@ collector/data/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Next.js prototype
+/web/node_modules/
+/web/.next/
+/web/.next-tunnel/
+/web/.next-pilot/
+/web/next-env.d.ts
+/web/*.tsbuildinfo

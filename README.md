@@ -20,6 +20,7 @@
 | [docs/decisions.md](docs/decisions.md) | 現行資料與操作規則 |
 | [docs/development-requirements.md](docs/development-requirements.md) | LINE 與瀏覽器共用、人事功能、權限及驗收需求 |
 | [docs/approval-workflow.md](docs/approval-workflow.md) | 人事簽核路徑、院級設定與驗收案例 |
+| [web/README.md](web/README.md) | 人資工作台本機原型、測試帳號及驗收步驟 |
 | `scripts/hr-db.ps1` | 資料庫維護與 SQLite 備份入口 |
 | `collector/.local/` | 隨 collector 搬移的執行密碼與 CA，不進 Git |
 | `.local/` | Schema 管理密碼、備份、驗證報告及封存，不進 Git |

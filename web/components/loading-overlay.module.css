@@ -1,0 +1,60 @@
+/* 齒輪配色與旋轉構圖參考 https://codepen.io/jcoulterdesign/pen/bNxeKY */
+.overlay {
+  --bg: #f3f7fd;
+  --primary-strong: #244e7e;
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  width: 100vw;
+  height: 100dvh;
+  color: var(--primary-strong);
+  font-family: "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", "微軟正黑體", "Heiti TC",
+    system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  pointer-events: none;
+}
+
+.overlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgb(243 247 253 / 40%);
+  backdrop-filter: blur(3px);
+}
+
+.content {
+  position: relative;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  height: 100%;
+  gap: 28px;
+  padding: 24px;
+  text-align: center;
+  font-size: 1rem;
+  line-height: 1.6;
+  font-weight: 600;
+}
+
+.content p { margin: 0; max-width: 28em; overflow-wrap: anywhere; }
+.cogs { position: relative; width: 164px; height: 142px; }
+.gear { position: absolute; width: var(--size); height: var(--size); animation: rotate 9s linear infinite; }
+.gear i { position: absolute; inset: 0; background: var(--color); border-radius: 12%; }
+.gear i:nth-child(2) { transform: rotate(30deg); }
+.gear i:nth-child(3) { transform: rotate(60deg); }
+.gear b { position: absolute; inset: 26%; border-radius: 50%; background: var(--bg); }
+.pink { --size: 76px; --color: #81a9dc; top: 0; left: 48px; }
+.blue { --size: 60px; --color: #b8d4f4; top: 72px; left: 4px; animation-direction: reverse; }
+.yellow { --size: 48px; --color: #e4b6a2; top: 85px; left: 104px; animation-duration: 7s; }
+
+@keyframes rotate {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gear { animation: none; }
+}
+
+@media print {
+  .overlay { display: none; }
+}
