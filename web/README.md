@@ -98,7 +98,9 @@ Vercel 專案 `web` 以 `web/` 為建置目錄。[開發用 LIFF Endpoint](https
 
 Vercel 專案的 Production 環境設定 `HR_LINE_PILOT_HOST`、`LINE_LIFF_ID` 和 `LINE_LOGIN_CHANNEL_ID`，並將 `HR_LINE_PILOT_SUBJECT_SHA256`、`HR_LINE_PILOT_DATABASE_URL` 和 `HR_LINE_PILOT_DATABASE_CA` 設為伺服器端設定。其中資料庫 URL 使用正式 Supabase 的交易連線池以及專用角色 `hr_web_pilot`，憑證驗證保持啟用。網頁與 LINE 都使用相同域名和短效登入 Cookie。Preview 部署與其他主機名稱不會啟用正式名冊。
 
-正式庫維護時，只套用已核准的 LINE 綁定與管理者授權兩支 migration，逐支核對並登錄 `db_migrations.hr`。`database/tools/render-line-web-pilot.cjs` 以允許登入的 LINE 使用者 ID 的 SHA-256 指紋產生同一套登入限制與名冊查詢 SQL，使用 Node.js 24 執行。角色僅能執行已核准的六個函式。名冊驗收環境的班表為唯讀，正式班表草稿 migration 另行確認。
+正式庫已套用 LINE 綁定、管理者授權及班表草稿 migration，逐支核對並登錄 `db_migrations.hr`。`database/tools/render-line-web-pilot.cjs` 使用 Node.js 24 提供 `lineWebPilotFunctions` 與 `rosterWebPilotDraftFunctions`，分別產生限定帳號的登入及名冊 SQL，以及草稿讀取與儲存 SQL。Vercel 專用角色 `hr_web_pilot` 僅可執行獲授權的函式。
+
+Vercel Production 設定 `HR_ROSTER_CLOUD_DRAFTS=1` 後可從班表頁儲存草稿。要回復名冊唯讀，移除該設定並重新部署，或切回先前的唯讀部署，再撤銷 `hr_web_pilot` 對 `hr.roster_web_pilot_draft_read`、`hr.roster_web_pilot_draft_save` 的執行權。已儲存的草稿保留於正式庫。
 
 若須停止驗收，撤銷專用資料庫角色的登入與函式權限，撤除 Vercel 的正式名冊設定並回復部署。撤銷 P271 的驗收授權時保留授權歷史。
 

@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { currentLineTestIdentity, lineTestMode } from "../../../../lib/line-test-db"
-import { saveRosterDraft } from "../../../../lib/roster-draft-db"
-import { isRosterDraftMode } from "../../../../lib/roster-db"
+import { saveCloudRosterDraft, saveRosterDraft } from "../../../../lib/roster-draft-db"
+import { canUseRosterDrafts } from "../../../../lib/roster-db"
 import { parseRosterEdit } from "../../../../lib/roster-draft"
 
 export async function POST(request: NextRequest) {
   const mode = lineTestMode(request.headers)
-  if (!isRosterDraftMode(mode)) return NextResponse.json({}, { status: 404 })
+  if (!canUseRosterDrafts(mode)) return NextResponse.json({}, { status: 404 })
   const host = request.headers.get("host")
   const protocol = mode === "local" ? request.nextUrl.protocol : "https:"
   if (request.headers.get("origin") !== `${protocol}//${host}`) {
@@ -19,9 +19,14 @@ export async function POST(request: NextRequest) {
   if (!edit) return NextResponse.json({ error: "請檢查人員、日期和班次內容。" }, { status: 400 })
 
   try {
-    const identity = await currentLineTestIdentity(mode)
-    if (!identity) return NextResponse.json({ error: "請重新登入。" }, { status: 401 })
-    const result = await saveRosterDraft(mode, identity.employee.employeeNo, edit)
+    let result
+    if (mode === "cloud-pilot") {
+      result = await saveCloudRosterDraft(edit)
+    } else {
+      const identity = await currentLineTestIdentity(mode)
+      if (!identity) return NextResponse.json({ error: "請重新登入。" }, { status: 401 })
+      result = await saveRosterDraft(mode, identity.employee.employeeNo, edit)
+    }
     return "status" in result
       ? NextResponse.json({ error: result.error }, { status: result.status })
       : NextResponse.json(result)

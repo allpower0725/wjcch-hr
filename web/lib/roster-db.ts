@@ -31,6 +31,10 @@ export function isRosterDraftMode(mode: LineTestMode | undefined): mode is Roste
   return mode === "local" || mode === "tunnel" || mode === "pilot"
 }
 
+export function canUseRosterDrafts(mode: LineTestMode | undefined): mode is RosterMode {
+  return isRosterDraftMode(mode) || (mode === "cloud-pilot" && process.env.HR_ROSTER_CLOUD_DRAFTS === "1")
+}
+
 export async function rosterSessionHash(mode: RosterMode) {
   return lineWebTokenHash((await cookies()).get(lineCookieNames(mode).session)?.value)
 }

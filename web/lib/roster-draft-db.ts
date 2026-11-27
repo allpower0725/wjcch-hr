@@ -1,8 +1,10 @@
 import "server-only"
 
 import type { Pool, PoolClient } from "pg"
-import { rosterPool, rosterSessionHash, rosterWorkspaceParams, type RosterDraftMode, type RosterWorkspace } from "./roster-db"
-import { rosterIntervals, rosterSegmentError, type RosterDraft, type RosterEdit } from "./roster-draft"
+import { queryCloudPilot } from "./cloud-pilot-db"
+import { rosterPool, rosterSessionHash, rosterWorkspaceParams, type RosterDraftMode, type RosterMode, type RosterWorkspace } from "./roster-db"
+import { rosterDraftQuery } from "./roster-draft-queries"
+import { rosterIntervals, rosterMinutes, rosterSegmentError, type RosterDraft, type RosterEdit } from "./roster-draft"
 import { rosterWorkspaceQuery } from "./roster-queries"
 
 async function draftsAvailable(db: Pool | PoolClient) {
@@ -14,53 +16,34 @@ async function draftsAvailable(db: Pool | PoolClient) {
   return state.available
 }
 
-export async function readRosterDraft(mode: RosterDraftMode, employeeNo: string, unitId: number, month: string) {
+export async function readRosterDraft(mode: RosterMode, employeeNo: string, unitId: number, month: string) {
   const hash = await rosterSessionHash(mode)
   if (!hash) return
+  if (mode === "cloud-pilot") {
+    return queryCloudPilot<RosterDraft>("SELECT * FROM hr.roster_web_pilot_draft_read($1, $2, $3::date)", [hash, unitId, month + "-01"])
+  }
   const database = rosterPool(mode)
   if (!await draftsAvailable(database)) return
 
-  const { rows: [draft] } = await database.query<RosterDraft>(`
-    WITH scope AS (${rosterWorkspaceQuery}),
-    selected AS (
-      SELECT scope."selectedUnitId" AS department_id, v.revision
-      FROM scope
-      LEFT JOIN hr.roster_version AS v
-        ON v.department_id = scope."selectedUnitId" AND v.month_start = $5 AND v.status = 'draft'
-      WHERE scope."selectedUnitId" = $3
-    )
-    SELECT COALESCE(selected.revision, 0) AS revision, COALESCE((
-      SELECT jsonb_agg(jsonb_build_object(
-        'employeeId', d.employee_id,
-        'date', to_char(d.work_date, 'YYYY-MM-DD'),
-        'kind', d.day_kind,
-        'segments', COALESCE((
-          SELECT jsonb_agg(jsonb_build_object(
-            'start', to_char(s.starts_at AT TIME ZONE 'Asia/Taipei', 'HH24:MI'),
-            'end', to_char(s.ends_at AT TIME ZONE 'Asia/Taipei', 'HH24:MI'),
-            'startNextDay', (s.starts_at AT TIME ZONE 'Asia/Taipei')::date > d.work_date,
-            'endNextDay', (s.ends_at AT TIME ZONE 'Asia/Taipei')::date > d.work_date
-          ) ORDER BY s.segment_no)
-          FROM hr.roster_shift_segment AS s WHERE s.roster_day_id = d.roster_day_id
-        ), '[]'::jsonb)
-      ) ORDER BY d.work_date)
-      FROM hr.roster_day AS d
-      JOIN hr.roster_version AS v USING (version_id)
-      WHERE v.department_id = selected.department_id AND v.status = 'draft'
-        AND d.work_date >= $5::date - 7
-        AND d.work_date < ($5::date + interval '1 month')::date + 7
-        AND EXISTS (
-        SELECT 1 FROM scope CROSS JOIN LATERAL jsonb_array_elements(scope.people) AS person
-        WHERE (person->>'employeeId')::integer = d.employee_id
-      )
-    ), '[]'::jsonb) AS days
-    FROM selected
-  `, [...rosterWorkspaceParams(mode, hash, employeeNo, unitId), month + "-01"])
+  const { rows: [draft] } = await database.query<RosterDraft>(rosterDraftQuery(rosterWorkspaceQuery, "$3", "$5"), [...rosterWorkspaceParams(mode, hash, employeeNo, unitId), month + "-01"])
   return draft
 }
 
 type SaveResult = { revision: number } | { status: number; error: string }
 const stale = { status: 409, error: "這個月的草稿已更新。請重新載入班表，再核對要儲存的日期。" }
+
+export async function saveCloudRosterDraft(edit: RosterEdit): Promise<SaveResult> {
+  const hash = await rosterSessionHash("cloud-pilot")
+  if (!hash) return { status: 401, error: "請重新登入。" }
+  const segments = edit.entry?.segments ?? []
+  const starts = segments.map((segment) => rosterMinutes(segment.start, segment.startNextDay))
+  const ends = segments.map((segment) => rosterMinutes(segment.end, segment.endNextDay))
+  const saved = await queryCloudPilot<{ result: SaveResult }>(
+    "SELECT hr.roster_web_pilot_draft_save($1, $2, $3, $4::date, $5, $6::date[], $7, $8::integer[], $9::integer[]) AS result",
+    [hash, edit.unitId, edit.employeeId, edit.month + "-01", edit.revision, edit.dates, edit.entry?.kind ?? null, starts, ends],
+  )
+  return saved?.result ?? { status: 503, error: "暫時無法儲存班次，請稍後再試。" }
+}
 
 export async function saveRosterDraft(mode: RosterDraftMode, employeeNo: string, edit: RosterEdit): Promise<SaveResult> {
   const hash = await rosterSessionHash(mode)
@@ -90,7 +73,7 @@ export async function saveRosterDraft(mode: RosterDraftMode, employeeNo: string,
       await db.query(`
         INSERT INTO hr.roster_version (department_id, month_start, updated_by_employee_id)
         VALUES ($1, $2, $3)
-        ON CONFLICT (department_id, month_start) WHERE status = 'draft' DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [...versionParams, scope.viewerId])
     }
     const { rows: [version] } = await db.query<{ version_id: string; revision: number }>(`
