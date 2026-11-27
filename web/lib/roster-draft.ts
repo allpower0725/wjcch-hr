@@ -86,12 +86,35 @@ export function rosterMinutes(time: string, nextDay: boolean) {
   return Number(time.slice(0, 2)) * 60 + Number(time.slice(3)) + (nextDay ? dayMinutes : 0)
 }
 
-export function rosterSegmentError(segments: RosterSegment[]) {
-  if (!segments.length || segments.some((segment) => !validSegment(segment))) return "請填寫各時段的開始和結束時間。"
-  const intervals = segments
-    .map((segment) => [rosterMinutes(segment.start, segment.startNextDay), rosterMinutes(segment.end, segment.endNextDay)])
-    .sort(([first], [second]) => first - second)
-  if (intervals.some(([start, end], index) => end <= start || (index > 0 && start < intervals[index - 1][1]))) {
-    return "請確認各時段起訖、是否為次日，以及時段有無重疊。"
+export function rosterSegmentIssue(segments: RosterSegment[]) {
+  const invalid = new Set<number>()
+  const messages = new Set<string>()
+  const intervals: { start: number; end: number; index: number }[] = []
+  if (!segments.length) messages.add("請新增至少一段工作時段。")
+  segments.forEach((segment, index) => {
+    if (!validSegment(segment)) {
+      invalid.add(index)
+      messages.add("請填寫開始和結束時間。")
+      return
+    }
+    const start = rosterMinutes(segment.start, segment.startNextDay)
+    const end = rosterMinutes(segment.end, segment.endNextDay)
+    if (end <= start) {
+      invalid.add(index)
+      messages.add("結束日期與時間須晚於開始。")
+      return
+    }
+    intervals.push({ start, end, index })
+  })
+  intervals.sort((first, second) => first.start - second.start)
+  let furthest: (typeof intervals)[number] | undefined
+  for (const interval of intervals) {
+    if (furthest && interval.start < furthest.end) {
+      invalid.add(furthest.index)
+      invalid.add(interval.index)
+      messages.add("標示的時段互相重疊，請調整日期或時間。")
+    }
+    if (!furthest || interval.end > furthest.end) furthest = interval
   }
+  if (messages.size) return { invalid, message: [...messages].join("") }
 }

@@ -22,6 +22,16 @@
   backdrop-filter: blur(3px);
 }
 
+.overlay[data-contained] {
+  position: absolute;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+.overlay[data-contained]::before {
+  background: rgb(243 247 253 / 86%);
+}
+
 .content {
   position: relative;
   display: grid;

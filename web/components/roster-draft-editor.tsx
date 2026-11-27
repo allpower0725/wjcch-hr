@@ -1,7 +1,9 @@
 "use client"
 
-import { useId, useMemo, useRef, useState, useTransition, type FormEvent, type ReactNode } from "react"
+import { Fragment, useId, useMemo, useRef, useState, useTransition, type FormEvent, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
+import { useGSAP } from "@gsap/react"
+import gsap from "gsap"
 import { AlertDialog, AlertDialogClose, AlertDialogContent, AlertDialogDescription, AlertDialogTitle, AlertDialogTrigger } from "@ui-sdk/react/alert-dialog"
 import { Button } from "@ui-sdk/react/button"
 import { Calendar, CalendarDay, CalendarGrid, CalendarWeekday, CalendarWeekdays, CalendarWeeks } from "@ui-sdk/react/calendar"
@@ -11,20 +13,23 @@ import { Field, FieldLabel } from "@ui-sdk/react/field"
 import { Input } from "@ui-sdk/react/input"
 import { SegmentedControl, SegmentedControlItem } from "@ui-sdk/react/segmented-control"
 import { Select, SelectContent, SelectGroup, SelectGroupLabel, SelectItem, SelectItemIndicator, SelectLabel, SelectTrigger, SelectValue } from "@ui-sdk/react/select"
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Plus } from "lucide-react"
+import { ArrowRight, CalendarDays, CalendarPlus, Check, ChevronDown, ChevronLeft, ChevronRight,
+  CircleAlert, Eraser, Plus, Save, Trash2, X } from "lucide-react"
 import type { RosterPerson, RosterUnit } from "../lib/roster-db"
 import {
   dateWeekday, dayMinutes, durationLabel, groupRosterDays, monthDates, offsetDate, offsetMonth, paidRosterRanges,
   presetSegments, rangeLabel, rosterDateLabel, rosterEntrySummary, rosterHours, rosterShiftTitle, segmentRanges,
   shortRosterDate, workWindow, type RosterView,
 } from "../lib/roster-calendar"
-import { rosterNoteLimit, rosterSegmentError, validRosterDate, validRosterMonth, type RosterDraft, type RosterEntry,
+import { rosterNoteLimit, rosterSegmentIssue, validRosterDate, validRosterMonth, type RosterDraft, type RosterEntry,
   type RosterSegment, type RosterShiftType } from "../lib/roster-draft"
-import { LoadingFeedback } from "./loading-state"
+import { LoadingFeedback, LoadingProvider } from "./loading-state"
 import { RosterDateDetails, RosterMonthlyHours, RosterTimeTrack, RosterWeek } from "./roster-overview"
 import { RosterUnitSelect } from "./roster-unit-select"
 import panel from "./roster-workspace.module.css"
 import styles from "./roster-draft.module.css"
+
+gsap.registerPlugin(useGSAP)
 
 type BatchMode = "add" | "delete"
 const blankSegment: RosterSegment = { start: "", end: "", startNextDay: false, endNextDay: false }
@@ -59,10 +64,12 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
   const [editorDates, setEditorDates] = useState<string[]>([])
   const [current, setCurrent] = useState(draft ?? emptyDraft)
   const [dirty, setDirty] = useState(false)
-  const [saving, setSaving] = useState(false)
+  const [writeMessage, setWriteMessage] = useState<string>()
+  const writeInFlight = useRef(false)
   const [dismissMessage, setDismissMessage] = useState("")
   const [status, setStatus] = useState("")
   const employee = people.find((person) => person.employeeId === employeeId)
+  const saving = writeMessage !== undefined
   const grouped = useMemo(() => groupRosterDays(current.days), [current.days])
   const personDays = employee ? grouped.get(employee.employeeId) : undefined
   const monthDays = monthDates(month)
@@ -122,8 +129,10 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
   }
 
   async function persist(entry: RosterEntry | null, dates: string[]) {
-    if (!employee || saving || !dates.length) return "請先選擇人員和日期。"
-    setSaving(true)
+    if (writeInFlight.current) return "正在處理班次，請稍候。"
+    if (!employee || !dates.length) return "請先選擇人員和日期。"
+    writeInFlight.current = true
+    setWriteMessage(entry ? "正在儲存班次…" : "正在刪除班次…")
     setStatus("")
     try {
       const response = await fetch("/api/roster/draft", {
@@ -143,7 +152,8 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
     } catch (error) {
       return error instanceof Error ? error.message : "暫時無法儲存班次，請稍後再試。"
     } finally {
-      setSaving(false)
+      writeInFlight.current = false
+      setWriteMessage(undefined)
     }
   }
 
@@ -172,16 +182,16 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
 
   return (
     <>
-      <LoadingFeedback message={monthPending ? "正在載入班表…" : undefined} />
-      <header className={panel.pageHeader}>
+      <LoadingFeedback message={editorDates.length ? undefined : writeMessage ?? (monthPending ? "正在載入班表…" : undefined)} />
+      <header className={panel.pageHeader} inert={saving}>
         {back}
         <h1 className={panel.title}>月班表編輯</h1>
         {draft && <RosterMonthlyHours month={month} unitName={unit.name} people={people} days={grouped} />}
       </header>
-      <div className={styles.unitControl}>
+      <div className={styles.unitControl} inert={saving}>
         <RosterUnitSelect units={units} selectedId={unit.id} month={month} date={activeDate} view={view} />
       </div>
-      <div className={styles.surface} data-view={view} aria-busy={monthPending}>
+      <div className={styles.surface} data-view={view} aria-busy={monthPending || saving} inert={saving}>
         <section className={panel.panel} aria-label="選擇排班日期">
           <SegmentedControl aria-label="班表檢視方式" className={styles.switch}
             value={editMode ? "edit" : "overview"} onValueChange={(value) => {
@@ -306,13 +316,15 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
           {batch && (
             <div className={styles.batchPanel}>
               <p>{batch === "add" ? "選日期套用同一班次。已排日期預設保留。" : "選取有排班記錄的日期，確認後清為未排。"}</p>
-              <div className={styles.batchActions}>
-                <Button className={styles.secondary} onClick={() => setBatchDates(monthDays.filter((date) =>
+              <div className={styles.actionRow}>
+                <Button data-tone="neutral" onClick={() => setBatchDates(monthDays.filter((date) =>
                   batch === "add" ? dateWeekday(date) >= 1 && dateWeekday(date) <= 5 : personDays?.has(date),
-                ))}>{batch === "add" ? "選取週間" : "選取已排"}</Button>
-                <Button className={styles.secondary} disabled={!batchDates.length} onClick={() => setBatchDates([])}>清除選取</Button>
-                {batch === "add" ? <Button className="button primary" disabled={!batchDates.length} onClick={() => openEditor(batchDates)}>
-                  設定班次（{batchDates.length} 日）
+                ))}><CalendarDays size={17} aria-hidden="true" /><span>{batch === "add" ? "選取週間" : "選取已排"}</span></Button>
+                <Button data-tone="neutral" disabled={!batchDates.length} onClick={() => setBatchDates([])}>
+                  <Eraser size={17} aria-hidden="true" /><span>清除選取</span>
+                </Button>
+                {batch === "add" ? <Button data-tone="primary" disabled={!batchDates.length} onClick={() => openEditor(batchDates)}>
+                  <CalendarPlus size={17} aria-hidden="true" /><span>設定班次（{batchDates.length} 日）</span>
                 </Button> : <AlertDialog onOpenChange={(open, details) => {
                   if (!open && details.returnValue === "confirm") {
                     void persist(null, batchDates).then((problem) => {
@@ -321,8 +333,8 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
                     })
                   }
                 }}>
-                  <AlertDialogTrigger render={<Button />} className={styles.danger} disabled={saving || !batchDates.length}>
-                    刪除所選（{batchDates.length} 日）
+                  <AlertDialogTrigger render={<Button />} data-tone="danger" disabled={saving || !batchDates.length}>
+                    <Trash2 size={17} aria-hidden="true" /><span>刪除所選（{batchDates.length} 日）</span>
                   </AlertDialogTrigger>
                   <AlertDialogContent className={`${styles.dialog} ${styles.summaryDialog}`}>
                     <AlertDialogTitle className={styles.dialogTitle}>確認批次刪除</AlertDialogTitle>
@@ -344,19 +356,24 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
         {!editMode && <RosterDateDetails date={activeDate} people={people} days={grouped} shifts={current.shifts} weekly={weekly} draftAvailable={!!draft} />}
       </div>
       <Dialog open={editorDates.length > 0} presentation="auto" dismissible={!dirty && !saving}
-        onDismissAttempt={() => setDismissMessage("有未儲存的變更。請儲存，或使用「放棄變更」。")}
+        onDismissAttempt={() => {
+          if (!saving) setDismissMessage("有未儲存的變更。請儲存，或使用「放棄變更」。")
+        }}
         onOpenChange={(open) => { if (!open && !saving) setEditorDates([]) }}>
         <DialogContent className={styles.dialog}>
-          <div className={styles.dialogStack}>
-            <DialogTitle className={styles.dialogTitle}>{batch ? "批次新增班次" : initialShift ? "編輯班次" : "新增班次"}</DialogTitle>
-            <DialogDescription className={styles.description}>
-              {unit.name} · {employee?.name} · {batch ? `${editorDates.length} 個選取日期` : editorDates[0] && rosterDateLabel(editorDates[0])}
-            </DialogDescription>
-            {editorDates.length > 0 && <ShiftForm key={editorDates.join(",")} initial={initialShift} shifts={current.shifts} saving={saving} dirty={dirty}
-              date={batch ? undefined : editorDates[0]}
-              batch={batch === "add"} canContinue={!batch && offsetDate(editorDates[0], 1).startsWith(month + "-")}
-              markDirty={() => { setDirty(true); setDismissMessage("") }} save={saveFromEditor} dismissMessage={dismissMessage} />}
-          </div>
+          <LoadingProvider contained>
+            <LoadingFeedback message={writeMessage} />
+            <div className={styles.dialogStack}>
+              <DialogTitle className={styles.dialogTitle}>{batch ? "批次新增班次" : initialShift ? "編輯班次" : "新增班次"}</DialogTitle>
+              <DialogDescription className={styles.description}>
+                {unit.name} · {employee?.name} · {batch ? `${editorDates.length} 個選取日期` : editorDates[0] && rosterDateLabel(editorDates[0])}
+              </DialogDescription>
+              {editorDates.length > 0 && <ShiftForm key={editorDates.join(",")} initial={initialShift} shifts={current.shifts} saving={saving} dirty={dirty}
+                date={batch ? undefined : editorDates[0]}
+                batch={batch === "add"} canContinue={!batch && offsetDate(editorDates[0], 1).startsWith(month + "-")}
+                markDirty={() => { setDirty(true); setDismissMessage("") }} save={saveFromEditor} dismissMessage={dismissMessage} />}
+            </div>
+          </LoadingProvider>
         </DialogContent>
       </Dialog>
     </>
@@ -402,13 +419,33 @@ function ShiftForm({ initial, shifts, saving, dirty, batch, date, canContinue, m
   const [overwrite, setOverwrite] = useState(false)
   const [error, setError] = useState("")
   const [missingShift, setMissingShift] = useState(false)
+  const [validationAttempt, setValidationAttempt] = useState(0)
   const shiftTrigger = useRef<HTMLButtonElement>(null)
+  const fields = useRef<HTMLDivElement>(null)
   const errorId = useId()
+  const timeErrorId = useId()
   const choices = shifts.filter((shift) => !shift.legacy || shift.code === initial?.code)
   const selected = choices.find((shift) => shift.code === code)
-  const timeIssue = selected?.kind === "work" ? rosterSegmentError(segments) : undefined
+  const timeIssue = selected?.kind === "work" ? rosterSegmentIssue(segments) : undefined
+  const highlighted = validationAttempt ? timeIssue : undefined
+  const firstInvalid = highlighted?.invalid.size ? Math.min(...highlighted.invalid) : undefined
+  const timeConflict = error.startsWith("時段與 ")
+  const timeError = highlighted?.message ?? (timeConflict ? error : undefined)
   const totals = selected?.kind === "work" && !timeIssue
     ? rosterHours(paidRosterRanges(selected.code, segmentRanges(segments))) : undefined
+
+  useGSAP(() => {
+    const body = fields.current
+    const message = body?.querySelector<HTMLElement>("[data-time-error]")
+    if (!body || !message) return
+    body.scrollTop += message.getBoundingClientRect().top - body.getBoundingClientRect().top - 4
+    message.focus({ preventScroll: true })
+    const media = gsap.matchMedia(body)
+    media.add("(prefers-reduced-motion: no-preference)", () => {
+      gsap.from("[data-time-invalid]", { scale: 0.985, duration: 0.32, ease: "power2.out", clearProps: "transform" })
+    })
+    return () => media.revert()
+  }, { scope: fields, dependencies: [validationAttempt], revertOnUpdate: true })
 
   function updateForm() {
     markDirty()
@@ -418,6 +455,7 @@ function ShiftForm({ initial, shifts, saving, dirty, batch, date, canContinue, m
   function applyDefaults(shift: RosterShiftType) {
     updateForm()
     setMissingShift(false)
+    setValidationAttempt(0)
     const defaults = presetSegments(shift)
     setSegments((defaults.length || shift.kind === "off" ? defaults : [blankSegment])
       .map((segment, key) => ({ key, ...segment })))
@@ -438,7 +476,8 @@ function ShiftForm({ initial, shifts, saving, dirty, batch, date, canContinue, m
       return
     }
     if (timeIssue) {
-      setError(timeIssue)
+      setError("")
+      setValidationAttempt((attempt) => attempt + 1)
       return
     }
     const values = segments.map(({ start, end, startNextDay, endNextDay }) => ({ start, end, startNextDay, endNextDay }))
@@ -449,12 +488,18 @@ function ShiftForm({ initial, shifts, saving, dirty, batch, date, canContinue, m
     const submitter = (event.nativeEvent as SubmitEvent).submitter
     setError("")
     const problem = await save(entry, submitter?.getAttribute("value") === "next", overwrite)
-    if (problem) setError(problem)
+    if (problem) {
+      setError(problem)
+      setValidationAttempt((attempt) => attempt + 1)
+    }
   }
 
+  const timingAlert = timeError && <p id={timeErrorId} className={styles.timeError}
+    role="alert" tabIndex={-1} data-time-error><CircleAlert size={18} aria-hidden="true" />{timeError}</p>
+
   return (
-    <form className={styles.form} method="post" action="/api/roster/draft" onSubmit={submit}>
-      <div className={styles.fields}>
+    <form className={styles.form} method="post" action="/api/roster/draft" onSubmit={submit} noValidate aria-busy={saving}>
+      <div className={styles.fields} ref={fields} inert={saving}>
         {initial && (
           <div className={styles.savedShift + " " + styles.currentShift}>
             <div>
@@ -503,27 +548,40 @@ function ShiftForm({ initial, shifts, saving, dirty, batch, date, canContinue, m
             {code === "B" && <p className={styles.shiftHelp} aria-live="polite">
               兩頭班每段起訖各打卡一次{totals ? "，目前共 " + segments.length * 2 + " 次。" : "。"}
             </p>}
-            <div className={styles.shiftTimingHeader}>
-              <h3 className={styles.sectionHeading}>排定時段</h3>
-              {selected.defaults.length > 0 && <Button type="button" className={styles.timingAction} onClick={() => applyDefaults(selected)}>
-                套用班別預設
-              </Button>}
+            <div className={styles.shiftTiming} data-time-invalid={timeConflict || undefined}>
+              <div className={styles.shiftTimingHeader}>
+                <h3 className={styles.sectionHeading}>排定時段</h3>
+                {selected.defaults.length > 0 && <Button type="button" className={styles.timingAction} onClick={() => applyDefaults(selected)}>
+                  套用班別預設
+                </Button>}
+              </div>
+              {firstInvalid === undefined && timingAlert}
+              {segments.map((segment, index) => {
+                const invalid = highlighted?.invalid.has(index)
+                const description = invalid ? timeErrorId : undefined
+                return (
+                  <Fragment key={segment.key}>
+                    {index === firstInvalid && timingAlert}
+                    <fieldset className={styles.segment} data-time-invalid={invalid || undefined}
+                      aria-describedby={description}>
+                      <legend>第 {index + 1} 段</legend>
+                      <TimeFields kind="start" index={index} date={date} segment={segment}
+                        issueId={description} change={(value) => changeSegment(segment.key, value)} />
+                      <TimeFields kind="end" index={index} date={date} segment={segment}
+                        issueId={description} change={(value) => changeSegment(segment.key, value)} />
+                      {segments.length > 1 && <Button type="button" className={styles.timingAction} onClick={() => {
+                        updateForm()
+                        setSegments((items) => items.filter((item) => item.key !== segment.key))
+                      }}>移除第 {index + 1} 段</Button>}
+                    </fieldset>
+                  </Fragment>
+                )
+              })}
+              <Button type="button" className={styles.timingAction} onClick={() => {
+                updateForm()
+                setSegments((items) => [...items, { key: items[items.length - 1].key + 1, ...blankSegment }])
+              }}><Plus size={18} aria-hidden="true" />新增時段</Button>
             </div>
-            {segments.map((segment, index) => (
-              <fieldset className={styles.segment} key={segment.key}>
-                <legend>第 {index + 1} 段</legend>
-                <TimeFields kind="start" index={index} date={date} segment={segment} change={(value) => changeSegment(segment.key, value)} />
-                <TimeFields kind="end" index={index} date={date} segment={segment} change={(value) => changeSegment(segment.key, value)} />
-                {segments.length > 1 && <Button type="button" className={styles.timingAction} onClick={() => {
-                  updateForm()
-                  setSegments((items) => items.filter((item) => item.key !== segment.key))
-                }}>移除第 {index + 1} 段</Button>}
-              </fieldset>
-            ))}
-            <Button type="button" className={styles.timingAction} onClick={() => {
-              updateForm()
-              setSegments((items) => [...items, { key: items[items.length - 1].key + 1, ...blankSegment }])
-            }}><Plus size={18} aria-hidden="true" />新增時段</Button>
           </>
         )}
         {selected && (
@@ -544,18 +602,22 @@ function ShiftForm({ initial, shifts, saving, dirty, batch, date, canContinue, m
           </Checkbox>
           <FieldLabel>覆蓋已排的日期</FieldLabel>
         </Field>}
-        {(error || dismissMessage) && <p id={errorId} className="notice error" role="alert"
+        {((error && !timeConflict) || dismissMessage) && <p id={errorId} className="notice error" role="alert"
           ref={(node) => {
             const body = node?.parentElement
             if (body) body.scrollTop = body.scrollHeight
-          }}>{error || dismissMessage}</p>}
+          }}>{(!timeConflict && error) || dismissMessage}</p>}
       </div>
-      <div className={styles.formActions}>
-        <DialogClose render={<Button />} className={styles.shiftCancel} disabled={saving}>{dirty ? "放棄變更" : "取消"}</DialogClose>
-        <Button className={styles.saveAction} type="submit" value="save" disabled={saving}>
-          {saving ? "儲存中…" : "儲存班次"}
+      <div className={styles.actionRow + " " + styles.formActions}>
+        <DialogClose render={<Button focusableWhenDisabled />} data-tone="neutral" disabled={saving}>
+          <X size={17} aria-hidden="true" /><span>{dirty ? "放棄變更" : "取消"}</span>
+        </DialogClose>
+        <Button data-tone="primary" type="submit" value="save" disabled={saving} focusableWhenDisabled>
+          <Save size={17} aria-hidden="true" /><span>儲存班次</span>
         </Button>
-        {canContinue && <Button className={styles.saveNextAction} type="submit" value="next" disabled={saving}>儲存並編下一日</Button>}
+        {canContinue && <Button data-tone="next" type="submit" value="next" disabled={saving} focusableWhenDisabled>
+          <ArrowRight size={17} aria-hidden="true" /><span>儲存並編下一日</span>
+        </Button>}
       </div>
     </form>
   )
@@ -581,11 +643,12 @@ function ShiftOptions({ heading, shifts }: { heading: string; shifts: RosterShif
   )
 }
 
-function TimeFields({ kind, index, date, segment, change }: {
+function TimeFields({ kind, index, date, segment, issueId, change }: {
   kind: "start" | "end"
   index: number
   date?: string
   segment: RosterSegment
+  issueId?: string
   change(value: Partial<RosterSegment>): void
 }) {
   const title = kind === "start" ? "開始" : "結束"
@@ -602,7 +665,7 @@ function TimeFields({ kind, index, date, segment, change }: {
           if (value === "same" || value === "next") change({ [nextDay]: value === "next" })
         }}>
         <SelectLabel className="sr-only">{title}日期，第 {index + 1} 段</SelectLabel>
-        <SelectTrigger className={`${styles.select} ${styles.dateSelect}`}>
+        <SelectTrigger className={`${styles.select} ${styles.dateSelect}`} aria-invalid={Boolean(issueId)} aria-describedby={issueId}>
           <SelectValue /><ChevronDown size={16} aria-hidden="true" />
         </SelectTrigger>
         <SelectContent className={panel.options} sideOffset={4}>
@@ -616,7 +679,7 @@ function TimeFields({ kind, index, date, segment, change }: {
       <Field>
         <FieldLabel className="sr-only">{title}時間，第 {index + 1} 段</FieldLabel>
         <Input className={styles.time} type="time" name={`${kind}-${index}`} value={segment[kind]}
-          onChange={(event) => change({ [kind]: event.target.value })} required />
+          onChange={(event) => change({ [kind]: event.target.value })} aria-invalid={Boolean(issueId)} aria-describedby={issueId} required />
       </Field>
     </div>
   )

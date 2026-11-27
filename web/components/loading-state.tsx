@@ -9,7 +9,7 @@ const loadingPageMessage = "載入中，請稍候…"
 type Operation = { message: string }
 const LoadingContext = createContext<((message: string) => () => void) | null>(null)
 
-export function LoadingProvider({ children }: { children: ReactNode }) {
+export function LoadingProvider({ children, contained = false }: { children: ReactNode; contained?: boolean }) {
   const [operations, setOperations] = useState<Operation[]>([])
   const [showOverlay, setShowOverlay] = useState(false)
   const message = operations.at(-1)?.message
@@ -36,7 +36,7 @@ export function LoadingProvider({ children }: { children: ReactNode }) {
       {children}
       <div role="status" aria-atomic="true">
         {showOverlay && message && (
-          <div className={styles.overlay} data-loading-overlay>
+          <div className={styles.overlay} data-loading-overlay data-contained={contained || undefined}>
             <div className={styles.content}>
               <div className={styles.cogs} aria-hidden="true">
                 {[styles.pink, styles.blue, styles.yellow].map((color) => (
