@@ -72,6 +72,65 @@ Get-Content -Raw -Encoding UTF8 database/tools/initialize-system-admin.sql |
 
 授權記錄以 `employee_id` 關聯，包含授權來源、時間與資料庫維護身分。重跑會保留同一筆有效的初始授權。若初始授權已撤銷，交接或復原由受授權的維護人員在交易中記錄撤銷時間與維護身分，核對接任員工的有效 LINE 綁定，再以 `maintenance` 來源新增授權。保留原有記錄供查核。
 
+### P271 角色切換
+
+這是有資料庫維護權限的人員用來切換 P271 驗收權限的步驟。
+
+1. 開啟 [Supabase `wjcch` 的 SQL Editor](https://supabase.com/dashboard/project/tbulauezaixdjzdcqsem/sql/new)，確認專案是 `wjcch`，目標是 `postgres.hr`。
+2. 執行下方 SQL。將 `enable_admin` 設為 `false` 會撤銷 P271 目前的管理者授權，設為 `true` 則在有效 LINE 綁定下恢復授權。結果中的 `is_admin` 應等於所設定的值。
+3. 用同一個 P271 LINE 帳號重新整理 [Vercel 班表](https://web-three-coral-4cwibhtp88.vercel.app/roster)。授權有效時可看全院排班單位。撤銷後，名冊依 P271 的員工身分與現有主管指派判定。原有 LINE 綁定可繼續使用。
+
+```sql
+BEGIN;
+SET LOCAL ROLE hr;
+SET LOCAL lock_timeout = '10s';
+
+DO $toggle$
+DECLARE
+  enable_admin constant boolean := false; -- 改為 true 後執行可恢復管理者授權
+  pilot_id integer;
+  pilot_status hr.employee.employment_status%TYPE;
+BEGIN
+  IF current_database() <> 'postgres' THEN
+    RAISE EXCEPTION '資料庫名稱須為 postgres，請確認目前專案是 wjcch';
+  END IF;
+
+  LOCK TABLE hr.system_admin_grant IN SHARE ROW EXCLUSIVE MODE;
+  SELECT e.employee_id, e.employment_status INTO STRICT pilot_id, pilot_status FROM hr.employee AS e
+  WHERE e.employee_no = 'P271' FOR SHARE;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM hr.system_admin_grant
+    WHERE employee_id = pilot_id AND source = 'initial'
+  ) THEN
+    RAISE EXCEPTION 'P271 尚無初始管理者授權紀錄';
+  END IF;
+
+  IF enable_admin THEN
+    PERFORM 1 FROM hr.employee_line_binding
+    WHERE employee_id = pilot_id AND provider_id = '2005826039' AND revoked_at IS NULL
+    FOR SHARE;
+    IF NOT FOUND OR pilot_status NOT IN ('active', 'on_leave') THEN
+      RAISE EXCEPTION 'P271 必須有有效 LINE 綁定及可登入的在職狀態';
+    END IF;
+    INSERT INTO hr.system_admin_grant(employee_id, source)
+    VALUES (pilot_id, 'maintenance')
+    ON CONFLICT (employee_id) WHERE revoked_at IS NULL DO NOTHING;
+  ELSE
+    UPDATE hr.system_admin_grant
+    SET revoked_at = clock_timestamp(), revoked_by = session_user
+    WHERE employee_id = pilot_id AND revoked_at IS NULL;
+  END IF;
+END;
+$toggle$;
+
+SELECT employee_no, hr.has_system_admin_grant(employee_id) AS is_admin
+FROM hr.employee WHERE employee_no = 'P271';
+COMMIT;
+```
+
+重複執行同一方向不會新增重複授權。恢復時新增一筆 `maintenance` 授權，原先撤銷的紀錄保留。
+
 ## 台北時區設定
 
 本機主庫、測試庫與雲端資料庫的預設時區皆為 `Asia/Taipei`。兩份設定依序為：

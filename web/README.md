@@ -96,6 +96,8 @@ if ($tunnel.Name -eq 'ngrok.exe' -and $tunnel.CommandLine -match '127\.0\.0\.1:3
 
 Vercel 專案 `web` 以 `web/` 為建置目錄。[開發用 LIFF Endpoint](https://web-three-coral-4cwibhtp88.vercel.app/liff) 與 [班表入口](https://web-three-coral-4cwibhtp88.vercel.app/roster) 共用既有 LINE 驗證。啟用後，獲准的 LINE 帳號首次登入須重新比對正式員工資料並確認 P271 綁定。完成後，由維護端核對有效綁定並新增初始管理者授權。
 
+驗收不同角色時，依 [P271 角色切換](../database/README.md#p271-角色切換) 撤銷或恢復管理者授權，再重新整理班表。
+
 Vercel 專案的 Production 環境設定 `HR_LINE_PILOT_HOST`、`LINE_LIFF_ID` 和 `LINE_LOGIN_CHANNEL_ID`，並將 `HR_LINE_PILOT_SUBJECT_SHA256`、`HR_LINE_PILOT_DATABASE_URL` 和 `HR_LINE_PILOT_DATABASE_CA` 設為伺服器端設定。其中資料庫 URL 使用正式 Supabase 的交易連線池以及專用角色 `hr_web_pilot`，憑證驗證保持啟用。網頁與 LINE 都使用相同域名和短效登入 Cookie。Preview 部署與其他主機名稱不會啟用正式名冊。
 
 正式庫已套用 LINE 綁定、管理者授權及班表草稿 migration，逐支核對並登錄 `db_migrations.hr`。`database/tools/render-line-web-pilot.cjs` 使用 Node.js 24 提供 `lineWebPilotFunctions` 與 `rosterWebPilotDraftFunctions`，分別產生限定帳號的登入及名冊 SQL，以及草稿讀取與儲存 SQL。Vercel 專用角色 `hr_web_pilot` 僅可執行獲授權的函式。
