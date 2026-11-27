@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState, useTransition, type FormEvent, type ReactNode } from "react"
+import { useId, useMemo, useRef, useState, useTransition, type FormEvent, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { AlertDialog, AlertDialogClose, AlertDialogContent, AlertDialogDescription, AlertDialogTitle, AlertDialogTrigger } from "@ui-sdk/react/alert-dialog"
 import { Button } from "@ui-sdk/react/button"
@@ -10,14 +10,16 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, Dia
 import { Field, FieldLabel } from "@ui-sdk/react/field"
 import { Input } from "@ui-sdk/react/input"
 import { SegmentedControl, SegmentedControlItem } from "@ui-sdk/react/segmented-control"
-import { Select, SelectContent, SelectItem, SelectItemIndicator, SelectLabel, SelectTrigger, SelectValue } from "@ui-sdk/react/select"
+import { Select, SelectContent, SelectGroup, SelectGroupLabel, SelectItem, SelectItemIndicator, SelectLabel, SelectTrigger, SelectValue } from "@ui-sdk/react/select"
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Plus } from "lucide-react"
 import type { RosterPerson, RosterUnit } from "../lib/roster-db"
 import {
-  dateWeekday, dayMinutes, durationLabel, groupRosterDays, monthDates, offsetDate, offsetMonth, rosterDateLabel,
-  rosterEntrySummary, segmentRanges, shortRosterDate, workWindow, type RosterView,
+  dateWeekday, dayMinutes, durationLabel, groupRosterDays, monthDates, offsetDate, offsetMonth, paidRosterRanges,
+  presetSegments, rangeLabel, rosterDateLabel, rosterEntrySummary, rosterHours, rosterShiftTitle, segmentRanges,
+  shortRosterDate, workWindow, type RosterView,
 } from "../lib/roster-calendar"
-import { rosterSegmentError, validRosterDate, validRosterMonth, type RosterDraft, type RosterEntry, type RosterSegment } from "../lib/roster-draft"
+import { rosterNoteLimit, rosterSegmentError, validRosterDate, validRosterMonth, type RosterDraft, type RosterEntry,
+  type RosterSegment, type RosterShiftType } from "../lib/roster-draft"
 import { LoadingFeedback } from "./loading-state"
 import { RosterDateDetails, RosterMonthlyHours, RosterTimeTrack, RosterWeek } from "./roster-overview"
 import { RosterUnitSelect } from "./roster-unit-select"
@@ -25,9 +27,9 @@ import panel from "./roster-workspace.module.css"
 import styles from "./roster-draft.module.css"
 
 type BatchMode = "add" | "delete"
-const shiftTypes = [{ value: "work", label: "自訂工時" }, { value: "off", label: "休息日" }]
 const blankSegment: RosterSegment = { start: "", end: "", startNextDay: false, endNextDay: false }
-const emptyDraft: RosterDraft = { revision: 0, days: [] }
+const emptyDraft: RosterDraft = { revision: 0, days: [], shifts: [] }
+const shiftBadges: Record<string, string> = { R: "例", L: "假", OFF: "休", X: "自" }
 
 export function RosterDraftEditor({ unit, units, month, back, people, viewerId, draft, initialView, initialDate, initialPerson }: {
   unit: RosterUnit
@@ -132,6 +134,7 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
       const result = await response.json()
       if (!response.ok) throw new Error(result.error ?? "暫時無法儲存班次，請稍後再試。")
       setCurrent((saved) => ({
+        ...saved,
         revision: result.revision,
         days: saved.days.filter((day) => day.employeeId !== employee.employeeId || !dates.includes(day.date))
           .concat(entry ? dates.map((date) => ({ ...entry, date, employeeId: employee.employeeId })) : []),
@@ -260,7 +263,8 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
               <p className={styles.personProgress}>{draft ? `${filled}/${monthDays.length} 日已填 · 點日期編輯` : "草稿儲存尚未啟用"}</p>
             </div>
           )}
-          {weekly ? <RosterWeek date={activeDate} people={people} days={grouped} navigationPending={monthPending} selectDate={navigate} /> : (
+          {weekly ? <RosterWeek date={activeDate} people={people} days={grouped} shifts={current.shifts}
+            navigationPending={monthPending} selectDate={navigate} /> : (
             <Calendar key={batch ?? view} mode={batch ? "multiple" : "single"} month={month}
               value={datesValue} locale="zh-TW" weekdayFormat="narrow" showOutsideDays={false}
               unavailable={batch === "delete" ? monthDays.filter((date) => !personDays?.has(date)) : undefined}
@@ -274,14 +278,14 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
                     .filter((slots) => slots.length)
                   return (
                     <CalendarDay value={cell.date} className={styles.day} data-weekend={dateWeekday(cell.date) % 6 === 0}
-                      aria-label={`${rosterDateLabel(cell.date)}，${!draft ? "草稿尚未啟用" : editMode ? rosterEntrySummary(entry) : `${count}/${people.length} 人已填，${lanes.length} 人排定工作時段`}`}>
+                      aria-label={`${rosterDateLabel(cell.date)}，${!draft ? "草稿尚未啟用" : editMode ? rosterEntrySummary(entry, current.shifts) : `${count}/${people.length} 人已填，${lanes.length} 人排定工作時段`}`}>
                       <span className={styles.dayContent}>
                         {Number(cell.date.slice(8))}
                         {editMode ? <>
-                          <span className={styles.dayBadge} data-kind={entry?.kind ?? "empty"}>
-                            {entry?.kind === "work" ? "班" : entry?.kind === "off" ? "休" : draft ? "＋" : "—"}
+                          <span className={styles.dayBadge} data-kind={entry?.kind ?? "empty"} data-shift={entry?.code}>
+                            {entry ? shiftBadges[entry.code] ?? entry.code : draft ? "＋" : "—"}
                           </span>
-                          {!batch && entry?.kind === "work" && <span className={styles.dayTimes}>{rosterEntrySummary(entry)}</span>}
+                          {!batch && entry?.kind === "work" && <span className={styles.dayTimes}>{segmentRanges(entry.segments).map(rangeLabel).join("、")}</span>}
                         </> : <>
                           <span className={styles.dayCount} data-filled={count > 0}>
                             {draft ? <>{count}<span className={styles.dayCountTotal}>/{people.length}</span></> : "—"}
@@ -337,7 +341,7 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
           )}
           <p className={styles.saveStatus} role="status" aria-atomic="true">{status}</p>
         </section>
-        {!editMode && <RosterDateDetails date={activeDate} people={people} days={grouped} weekly={weekly} draftAvailable={!!draft} />}
+        {!editMode && <RosterDateDetails date={activeDate} people={people} days={grouped} shifts={current.shifts} weekly={weekly} draftAvailable={!!draft} />}
       </div>
       <Dialog open={editorDates.length > 0} presentation="auto" dismissible={!dirty && !saving}
         onDismissAttempt={() => setDismissMessage("有未儲存的變更。請儲存，或使用「放棄變更」。")}
@@ -348,7 +352,7 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
             <DialogDescription className={styles.description}>
               {unit.name} · {employee?.name} · {batch ? `${editorDates.length} 個選取日期` : editorDates[0] && rosterDateLabel(editorDates[0])}
             </DialogDescription>
-            {editorDates.length > 0 && <ShiftForm key={editorDates.join(",")} initial={initialShift} saving={saving} dirty={dirty}
+            {editorDates.length > 0 && <ShiftForm key={editorDates.join(",")} initial={initialShift} shifts={current.shifts} saving={saving} dirty={dirty}
               date={batch ? undefined : editorDates[0]}
               batch={batch === "add"} canContinue={!batch && offsetDate(editorDates[0], 1).startsWith(month + "-")}
               markDirty={() => { setDirty(true); setDismissMessage("") }} save={saveFromEditor} dismissMessage={dismissMessage} />}
@@ -380,8 +384,9 @@ function BatchGuide({ kind, disabled, start }: { kind: BatchMode; disabled: bool
   )
 }
 
-function ShiftForm({ initial, saving, dirty, batch, date, canContinue, markDirty, save, dismissMessage }: {
+function ShiftForm({ initial, shifts, saving, dirty, batch, date, canContinue, markDirty, save, dismissMessage }: {
   initial?: RosterEntry
+  shifts: RosterShiftType[]
   saving: boolean
   dirty: boolean
   batch: boolean
@@ -391,31 +396,56 @@ function ShiftForm({ initial, saving, dirty, batch, date, canContinue, markDirty
   save(entry: RosterEntry | null, next: boolean, overwrite: boolean): Promise<string | undefined>
   dismissMessage: string
 }) {
-  const [kind, setKind] = useState<RosterEntry["kind"]>(initial?.kind ?? "work")
-  const [segments, setSegments] = useState(() => (initial?.kind === "work" ? initial.segments : [blankSegment])
-    .map((segment, key) => ({ key, ...segment })))
+  const [code, setCode] = useState(initial?.code ?? null)
+  const [segments, setSegments] = useState(() => (initial?.segments ?? []).map((segment, key) => ({ key, ...segment })))
+  const [note, setNote] = useState(initial?.note ?? "")
   const [overwrite, setOverwrite] = useState(false)
   const [error, setError] = useState("")
-  const timeIssue = kind === "work" && rosterSegmentError(segments)
-  const total = kind === "work" && !timeIssue
-    ? segmentRanges({ kind, segments }).reduce((sum, time) => sum + time.end - time.start, 0)
-    : 0
+  const [missingShift, setMissingShift] = useState(false)
+  const shiftTrigger = useRef<HTMLButtonElement>(null)
+  const errorId = useId()
+  const choices = shifts.filter((shift) => !shift.legacy || shift.code === initial?.code)
+  const selected = choices.find((shift) => shift.code === code)
+  const timeIssue = selected?.kind === "work" ? rosterSegmentError(segments) : undefined
+  const totals = selected?.kind === "work" && !timeIssue
+    ? rosterHours(paidRosterRanges(selected.code, segmentRanges(segments))) : undefined
 
-  function changeSegment(key: number, value: Partial<RosterSegment>) {
+  function updateForm() {
     markDirty()
     setError("")
+  }
+
+  function applyDefaults(shift: RosterShiftType) {
+    updateForm()
+    setMissingShift(false)
+    const defaults = presetSegments(shift)
+    setSegments((defaults.length || shift.kind === "off" ? defaults : [blankSegment])
+      .map((segment, key) => ({ key, ...segment })))
+  }
+
+  function changeSegment(key: number, value: Partial<RosterSegment>) {
+    updateForm()
     setSegments((items) => items.map((item) => item.key === key ? { ...item, ...value } : item))
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (saving) return
+    if (!selected) {
+      setMissingShift(true)
+      setError("請先選擇工作班別或休假類型。")
+      shiftTrigger.current?.focus({ preventScroll: true })
+      return
+    }
     if (timeIssue) {
       setError(timeIssue)
       return
     }
     const values = segments.map(({ start, end, startNextDay, endNextDay }) => ({ start, end, startNextDay, endNextDay }))
-    const entry: RosterEntry = kind === "off" ? { kind, segments: [] } : { kind, segments: values }
+    const details = { code: selected.code, note: note.trim() || null }
+    const entry: RosterEntry = selected.kind === "off"
+      ? { ...details, kind: "off", segments: [] }
+      : { ...details, kind: "work", segments: values }
     const submitter = (event.nativeEvent as SubmitEvent).submitter
     setError("")
     const problem = await save(entry, submitter?.getAttribute("value") === "next", overwrite)
@@ -426,65 +456,99 @@ function ShiftForm({ initial, saving, dirty, batch, date, canContinue, markDirty
     <form className={styles.form} method="post" action="/api/roster/draft" onSubmit={submit}>
       <div className={styles.fields}>
         {initial && (
-          <div className={`${styles.savedShift} ${styles.currentShift}`}>
+          <div className={styles.savedShift + " " + styles.currentShift}>
             <div>
               <strong>目前班次</strong>
-              <p>{initial.kind === "work" ? `工作班 · ${rosterEntrySummary(initial)}` : rosterEntrySummary(initial)}</p>
+              <p>{rosterEntrySummary(initial, shifts)}</p>
             </div>
-            <Button className={styles.clearShift} disabled={saving} onClick={async () => {
+            <Button type="button" className={styles.clearShift} disabled={saving} onClick={async () => {
               setError("")
               const problem = await save(null, false, false)
               if (problem) setError(problem)
             }}>清為未排</Button>
           </div>
         )}
-        <Select items={shiftTypes} value={kind} name="kind" presentation="auto" onValueChange={(value) => {
-          if (value === "work" || value === "off") {
-            markDirty()
-            setKind(value)
-            setError("")
-          }
+        <Select items={choices.map((shift) => ({ value: shift.code, label: rosterShiftTitle(shift) }))}
+          value={code} name="code" placeholder="選擇班別" presentation="popover" disabled={saving} onValueChange={(value) => {
+          const choice = choices.find((shift) => shift.code === value)
+          if (!choice) return
+          setCode(choice.code)
+          applyDefaults(choice)
         }}>
           <SelectLabel className={panel.label}>班別</SelectLabel>
-          <SelectTrigger className={styles.select}><SelectValue /><ChevronDown size={20} aria-hidden="true" /></SelectTrigger>
-          <SelectContent className={panel.options} sideOffset={8}>
-            {shiftTypes.map((type) => <SelectItem key={type.value} value={type.value} className={panel.option}>
-              {type.label}<SelectItemIndicator className={panel.indicator}><Check size={16} aria-hidden="true" /></SelectItemIndicator>
-            </SelectItem>)}
+          <SelectTrigger ref={shiftTrigger} className={styles.select} aria-required="true"
+            aria-invalid={missingShift} aria-describedby={missingShift ? errorId : undefined}>
+            <SelectValue /><ChevronDown size={20} aria-hidden="true" />
+          </SelectTrigger>
+          <SelectContent className={panel.options} sideOffset={4}>
+            <ShiftOptions heading="工作班別" shifts={choices.filter((shift) => !shift.legacy && shift.kind === "work")} />
+            <ShiftOptions heading="休假與其他" shifts={choices.filter((shift) => !shift.legacy && shift.kind === "off")} />
+            <ShiftOptions heading="既有班別" shifts={choices.filter((shift) => shift.legacy)} />
           </SelectContent>
         </Select>
-        {kind === "work" && (
+        {selected?.kind === "work" && (
           <>
-            <div className={styles.savedShift}>
-              <strong>工作時數</strong>
-              <output aria-live="polite">{timeIssue ? "—" : durationLabel(total)}</output>
+            <div className={styles.shiftMetrics}>
+              <div className={styles.savedShift}>
+                <strong>工作時數</strong>
+                <output aria-label="工作時數">{totals ? durationLabel(totals.work) : "—"}</output>
+              </div>
+              <div className={styles.savedShift}>
+                <strong>加給時數</strong>
+                <output aria-label="加給時數">{totals ? durationLabel(totals.allowance) : "—"}</output>
+              </div>
             </div>
-            <h3 className={styles.sectionHeading}>排定時段</h3>
+            <p className={styles.shiftHelp}>加給時段為每日 18:00–次日 08:00。</p>
+            {code === "A" && <p className={styles.shiftHelp}>A 班扣除 12:00–13:00 午休。</p>}
+            {code === "B" && <p className={styles.shiftHelp} aria-live="polite">
+              兩頭班每段起訖各打卡一次{totals ? "，目前共 " + segments.length * 2 + " 次。" : "。"}
+            </p>}
+            <div className={styles.shiftTimingHeader}>
+              <h3 className={styles.sectionHeading}>排定時段</h3>
+              {selected.defaults.length > 0 && <Button type="button" className={styles.timingAction} onClick={() => applyDefaults(selected)}>
+                套用班別預設
+              </Button>}
+            </div>
             {segments.map((segment, index) => (
               <fieldset className={styles.segment} key={segment.key}>
                 <legend>第 {index + 1} 段</legend>
                 <TimeFields kind="start" index={index} date={date} segment={segment} change={(value) => changeSegment(segment.key, value)} />
                 <TimeFields kind="end" index={index} date={date} segment={segment} change={(value) => changeSegment(segment.key, value)} />
-                {segments.length > 1 && <Button className="text-link" onClick={() => {
-                  markDirty()
+                {segments.length > 1 && <Button type="button" className={styles.timingAction} onClick={() => {
+                  updateForm()
                   setSegments((items) => items.filter((item) => item.key !== segment.key))
                 }}>移除第 {index + 1} 段</Button>}
               </fieldset>
             ))}
-            <Button className="text-link" onClick={() => {
-              markDirty()
+            <Button type="button" className={styles.timingAction} onClick={() => {
+              updateForm()
               setSegments((items) => [...items, { key: items[items.length - 1].key + 1, ...blankSegment }])
             }}><Plus size={18} aria-hidden="true" />新增時段</Button>
           </>
         )}
+        {selected && (
+          <Field>
+            <FieldLabel className={panel.label}>備註（選填）</FieldLabel>
+            <Input className={styles.note} type="text" name="note" value={note} maxLength={rosterNoteLimit}
+              onChange={(event) => { updateForm(); setNote(event.target.value) }} />
+          </Field>
+        )}
         {batch && <Field className={styles.nextDay}>
           <Checkbox name="overwrite" checked={overwrite}
-            onCheckedChange={(checked) => { markDirty(); setOverwrite(checked === true); setError("") }}>
+            onCheckedChange={(checked) => {
+              updateForm()
+              setMissingShift(false)
+              setOverwrite(checked === true)
+            }}>
             <CheckboxIndicator><Check size={16} aria-hidden="true" /></CheckboxIndicator>
           </Checkbox>
           <FieldLabel>覆蓋已排的日期</FieldLabel>
         </Field>}
-        {(error || dismissMessage) && <p className="notice error" role="alert">{error || dismissMessage}</p>}
+        {(error || dismissMessage) && <p id={errorId} className="notice error" role="alert"
+          ref={(node) => {
+            const body = node?.parentElement
+            if (body) body.scrollTop = body.scrollHeight
+          }}>{error || dismissMessage}</p>}
       </div>
       <div className={styles.formActions}>
         <DialogClose render={<Button />} className={styles.shiftCancel} disabled={saving}>{dirty ? "放棄變更" : "取消"}</DialogClose>
@@ -494,6 +558,26 @@ function ShiftForm({ initial, saving, dirty, batch, date, canContinue, markDirty
         {canContinue && <Button className={styles.saveNextAction} type="submit" value="next" disabled={saving}>儲存並編下一日</Button>}
       </div>
     </form>
+  )
+}
+
+function ShiftOptions({ heading, shifts }: { heading: string; shifts: RosterShiftType[] }) {
+  if (!shifts.length) return null
+  return (
+    <SelectGroup>
+      <SelectGroupLabel className={styles.shiftGroupLabel}>{heading}</SelectGroupLabel>
+      {shifts.map((shift) => (
+        <SelectItem key={shift.code} value={shift.code} className={panel.option}>
+          <span className={styles.shiftChoice}>
+            <strong>{rosterShiftTitle(shift)}</strong>
+            {shift.defaults.length > 0 && <span>
+              {shift.defaults.map(rangeLabel).join("、")}（{durationLabel(rosterHours(paidRosterRanges(shift.code, shift.defaults)).work)}）
+            </span>}
+          </span>
+          <SelectItemIndicator className={panel.indicator}><Check size={16} aria-hidden="true" /></SelectItemIndicator>
+        </SelectItem>
+      ))}
+    </SelectGroup>
   )
 }
 

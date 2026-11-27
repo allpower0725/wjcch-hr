@@ -1,4 +1,4 @@
-import { rosterMinutes, type RosterDay, type RosterEntry } from "./roster-draft"
+import { rosterMinutes, type RosterDay, type RosterEntry, type RosterSegment, type RosterShiftType } from "./roster-draft"
 
 export const dayMinutes = 24 * 60
 const weekdays = ["日", "一", "二", "三", "四", "五", "六"]
@@ -60,27 +60,73 @@ export function rangeLabel({ start, end }: MinuteRange) {
   return `${first}–${last}`
 }
 
-export function segmentRanges(entry: RosterEntry | undefined): MinuteRange[] {
-  if (entry?.kind !== "work") return []
-  return entry.segments.map((part) => ({
+export function segmentRanges(segments: RosterSegment[]): MinuteRange[] {
+  return segments.map((part) => ({
     start: rosterMinutes(part.start, part.startNextDay),
     end: rosterMinutes(part.end, part.endNextDay),
+  })).sort((first, second) => first.start - second.start)
+}
+
+export function presetSegments(shift: RosterShiftType): RosterSegment[] {
+  return shift.defaults.map(({ start, end }) => ({
+    start: clockTime(start),
+    end: clockTime(end),
+    startNextDay: start >= dayMinutes,
+    endNextDay: end >= dayMinutes,
   }))
 }
 
-export function rosterEntrySummary(entry: RosterEntry | undefined) {
+export function paidRosterRanges(code: string, ranges: MinuteRange[]): MinuteRange[] {
+  if (code !== "A") return ranges
+  return ranges.flatMap(({ start, end }) => {
+    const paid: MinuteRange[] = []
+    let cursor = start
+    for (let day = Math.floor(start / dayMinutes) * dayMinutes; day < end; day += dayMinutes) {
+      const lunchStart = day + 12 * 60
+      const lunchEnd = day + 13 * 60
+      if (lunchEnd <= cursor || lunchStart >= end) continue
+      if (cursor < lunchStart) paid.push({ start: cursor, end: lunchStart })
+      cursor = lunchEnd
+    }
+    if (cursor < end) paid.push({ start: cursor, end })
+    return paid
+  })
+}
+
+export function rosterHours(ranges: MinuteRange[]) {
+  let work = 0
+  let allowance = 0
+  for (const { start, end } of ranges) {
+    work += end - start
+    for (let day = Math.floor(start / dayMinutes) * dayMinutes; day < end; day += dayMinutes) {
+      allowance += Math.max(0, Math.min(end, day + 8 * 60) - Math.max(start, day))
+      allowance += Math.max(0, Math.min(end, day + dayMinutes) - Math.max(start, day + 18 * 60))
+    }
+  }
+  return { work, allowance }
+}
+
+export function rosterShiftTitle(shift: RosterShiftType) {
+  return shift.kind === "work" && !shift.legacy && shift.code !== "A" ? `${shift.code} ${shift.name}` : shift.name
+}
+
+export function rosterEntrySummary(entry: RosterEntry | undefined, shifts: RosterShiftType[]) {
   if (!entry) return "未排"
-  return entry.kind === "off" ? "休息日" : segmentRanges(entry).map(rangeLabel).join("、")
+  const shift = shifts.find((item) => item.code === entry.code)
+  const name = shift ? rosterShiftTitle(shift) : entry.code
+  return entry.kind === "off" ? name : `${name} · ${segmentRanges(entry.segments).map(rangeLabel).join("、")}`
 }
 
 export function workWindow(days: Map<string, RosterDay> | undefined, date: string, start: number, end: number) {
-  return [-1, 0, 1].flatMap((offset) =>
-    segmentRanges(days?.get(offsetDate(date, offset))).flatMap((segment) => {
+  return [-1, 0, 1].flatMap((offset) => {
+    const entry = days?.get(offsetDate(date, offset))
+    if (entry?.kind !== "work") return []
+    return paidRosterRanges(entry.code, segmentRanges(entry.segments)).flatMap((segment) => {
       const first = Math.max(start, segment.start + offset * dayMinutes)
       const last = Math.min(end, segment.end + offset * dayMinutes)
       return first < last ? [{ start: first, end: last }] : []
-    }),
-  ).sort((first, second) => first.start - second.start)
+    })
+  }).sort((first, second) => first.start - second.start)
 }
 
 export function durationLabel(total: number) {

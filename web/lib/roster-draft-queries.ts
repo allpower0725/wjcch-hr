@@ -13,6 +13,8 @@ export function rosterDraftQuery(scope: string, unit: string, month: string) {
         'employeeId', d.employee_id,
         'date', to_char(d.work_date, 'YYYY-MM-DD'),
         'kind', d.day_kind,
+        'code', coalesce(d.shift_code, CASE d.day_kind WHEN 'work' THEN 'X' ELSE 'OFF' END),
+        'note', d.note,
         'segments', COALESCE((
           SELECT jsonb_agg(jsonb_build_object(
             'start', to_char(s.starts_at AT TIME ZONE 'Asia/Taipei', 'HH24:MI'),

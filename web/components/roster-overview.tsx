@@ -5,16 +5,17 @@ import { ChevronLeft, ChevronRight } from "lucide-react"
 import type { RosterPerson } from "../lib/roster-db"
 import {
   concurrentStaffing, dateWeekday, dayMinutes, durationLabel, monthDates, offsetDate, rangeLabel, rosterDateLabel,
-  rosterEntrySummary, shortRosterDate, weekDates, workWindow, type MinuteRange, type RosterDays,
+  rosterEntrySummary, rosterHours, shortRosterDate, weekDates, workWindow, type MinuteRange, type RosterDays,
 } from "../lib/roster-calendar"
-import { validRosterDate } from "../lib/roster-draft"
+import { validRosterDate, type RosterShiftType } from "../lib/roster-draft"
 import panel from "./roster-workspace.module.css"
 import styles from "./roster-draft.module.css"
 
-export function RosterWeek({ date, people, days, navigationPending, selectDate }: {
+export function RosterWeek({ date, people, days, shifts, navigationPending, selectDate }: {
   date: string
   people: RosterPerson[]
   days: RosterDays
+  shifts: RosterShiftType[]
   navigationPending: boolean
   selectDate(date: string): void
 }) {
@@ -55,7 +56,7 @@ export function RosterWeek({ date, people, days, navigationPending, selectDate }
               <th scope="row">{person.name}</th>
               {week.map((day) => {
                 const entry = days.get(person.employeeId)?.get(day)
-                return <td key={day} data-current={day === date}>{rosterEntrySummary(entry)}</td>
+                return <td key={day} data-current={day === date}>{rosterEntrySummary(entry, shifts)}</td>
               })}
             </tr>
           ))}</tbody>
@@ -80,10 +81,11 @@ export function RosterTimeTrack({ slots, start, end }: { slots: MinuteRange[]; s
   )
 }
 
-export function RosterDateDetails({ date, people, days, weekly, draftAvailable }: {
+export function RosterDateDetails({ date, people, days, shifts, weekly, draftAvailable }: {
   date: string
   people: RosterPerson[]
   days: RosterDays
+  shifts: RosterShiftType[]
   weekly: boolean
   draftAvailable: boolean
 }) {
@@ -132,7 +134,8 @@ export function RosterDateDetails({ date, people, days, weekly, draftAvailable }
           return (
             <li key={person.employeeId}>
               <div><strong>{person.name}</strong>{person.jobTitle && <span>{person.jobTitle}</span>}</div>
-              {draftAvailable && <span>{rosterEntrySummary(entry)}</span>}
+              {draftAvailable && <span>{rosterEntrySummary(entry, shifts)}</span>}
+              {entry?.note && <p className={styles.rosterNote}>{entry.note}</p>}
             </li>
           )
         })}
@@ -148,10 +151,13 @@ export function RosterMonthlyHours({ month, unitName, people, days }: {
   days: RosterDays
 }) {
   const dates = monthDates(month)
-  const totals = people.map((person) => dates.reduce((sum, date) =>
-    sum + workWindow(days.get(person.employeeId), date, 0, dayMinutes).reduce((dayTotal, slot) =>
-      dayTotal + slot.end - slot.start, 0), 0,
-  ))
+  const totals = people.map((person) =>
+    rosterHours(dates.flatMap((date) => workWindow(days.get(person.employeeId), date, 0, dayMinutes))),
+  )
+  const unit = totals.reduce((sum, hours) => ({
+    work: sum.work + hours.work,
+    allowance: sum.allowance + hours.allowance,
+  }), { work: 0, allowance: 0 })
   return (
     <Dialog presentation="auto">
       <DialogTrigger render={<Button />} className={styles.secondary}>月結時數</DialogTrigger>
@@ -159,13 +165,16 @@ export function RosterMonthlyHours({ month, unitName, people, days }: {
         <DialogTitle className={styles.dialogTitle}>月結時數</DialogTitle>
         <DialogDescription className={styles.description}>{unitName} · {month} · 草稿排定工時</DialogDescription>
         <table className={styles.hoursTable}>
-          <thead><tr><th scope="col">人員</th><th scope="col">工作時數</th></tr></thead>
+          <thead><tr><th scope="col">人員</th><th scope="col">工作時數</th><th scope="col">加給時數</th></tr></thead>
           <tbody>{people.map((person, index) =>
-            <tr key={person.employeeId}><th scope="row">{person.name}</th><td>{durationLabel(totals[index])}</td></tr>,
+            <tr key={person.employeeId}>
+              <th scope="row">{person.name}</th>
+              <td>{durationLabel(totals[index].work)}</td><td>{durationLabel(totals[index].allowance)}</td>
+            </tr>,
           )}</tbody>
-          <tfoot><tr><th scope="row">單位合計</th><td>{durationLabel(totals.reduce((sum, minutes) => sum + minutes, 0))}</td></tr></tfoot>
+          <tfoot><tr><th scope="row">單位合計</th><td>{durationLabel(unit.work)}</td><td>{durationLabel(unit.allowance)}</td></tr></tfoot>
         </table>
-        <p className={styles.description}>跨月班次按實際工作日期分月計算。</p>
+        <p className={styles.description}>跨月班次按實際工作日期分月。每日加給時段為 18:00–次日 08:00。</p>
         <DialogClose render={<Button />} className={styles.secondary}>關閉</DialogClose>
       </DialogContent>
     </Dialog>

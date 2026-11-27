@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { currentLineTestIdentity, lineTestMode } from "../../../../lib/line-test-db"
 import { saveCloudRosterDraft, saveRosterDraft } from "../../../../lib/roster-draft-db"
 import { canUseRosterDrafts } from "../../../../lib/roster-db"
-import { parseRosterEdit } from "../../../../lib/roster-draft"
+import { parseRosterEdit, rosterSegmentError } from "../../../../lib/roster-draft"
 
 export async function POST(request: NextRequest) {
   const mode = lineTestMode(request.headers)
@@ -17,6 +17,8 @@ export async function POST(request: NextRequest) {
   }
   const edit = parseRosterEdit(await request.json().catch(() => null))
   if (!edit) return NextResponse.json({ error: "請檢查人員、日期和班次內容。" }, { status: 400 })
+  const issue = edit.entry?.kind === "work" && rosterSegmentError(edit.entry.segments)
+  if (issue) return NextResponse.json({ error: issue }, { status: 422 })
 
   try {
     let result

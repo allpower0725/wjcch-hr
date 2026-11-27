@@ -5,9 +5,17 @@ export type RosterSegment = {
   endNextDay: boolean
 }
 
-export type RosterEntry = { kind: "work"; segments: RosterSegment[] } | { kind: "off"; segments: [] }
+export type RosterEntry = { code: string; note: string | null } &
+  ({ kind: "work"; segments: RosterSegment[] } | { kind: "off"; segments: [] })
 export type RosterDay = RosterEntry & { employeeId: number; date: string }
-export type RosterDraft = { revision: number; days: RosterDay[] }
+export type RosterShiftType = {
+  code: string
+  name: string
+  kind: RosterEntry["kind"]
+  legacy: boolean
+  defaults: { start: number; end: number }[]
+}
+export type RosterDraft = { revision: number; days: RosterDay[]; shifts: RosterShiftType[] }
 
 export type RosterEdit = {
   unitId: number
@@ -16,12 +24,14 @@ export type RosterEdit = {
   dates: string[]
   revision: number
   entry: RosterEntry | null
+  legacy?: boolean
 }
 
 const monthPattern = /^[1-9][0-9]{3}-(0[1-9]|1[0-2])$/
 const datePattern = /^[1-9][0-9]{3}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/
 const timePattern = /^([01][0-9]|2[0-3]):[0-5][0-9]$/
 const dayMinutes = 24 * 60
+export const rosterNoteLimit = 100
 
 export const taipeiDate = () =>
   new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Taipei", dateStyle: "short" }).format(new Date())
@@ -58,12 +68,18 @@ export function parseRosterEdit(value: unknown): RosterEdit | undefined {
 
   if (entry === null) return { unitId, employeeId, month, dates, revision, entry }
   if (!record(entry) || !Array.isArray(entry.segments)) return
+  const legacy = entry.code === undefined && entry.note === undefined
+  const code = legacy ? (entry.kind === "work" ? "X" : "OFF") : entry.code
+  if (typeof code !== "string" || !/^[A-Z][A-Z0-9]{0,11}$/.test(code) ||
+      (!legacy && entry.note !== null && (typeof entry.note !== "string" || Array.from(entry.note).length > rosterNoteLimit))) return
+  const fields = { code, note: typeof entry.note === "string" ? entry.note.trim() || null : null }
+  const edit = { unitId, employeeId, month, dates, revision, legacy }
   if (entry.kind === "off" && !entry.segments.length) {
-    return { unitId, employeeId, month, dates, revision, entry: { kind: "off", segments: [] } }
+    return { ...edit, entry: { ...fields, kind: "off", segments: [] } }
   }
   if (entry.kind !== "work" || !entry.segments.length || entry.segments.length > dayMinutes ||
       !entry.segments.every(validSegment)) return
-  return { unitId, employeeId, month, dates, revision, entry: { kind: "work", segments: entry.segments } }
+  return { ...edit, entry: { ...fields, kind: "work", segments: entry.segments } }
 }
 
 export function rosterMinutes(time: string, nextDay: boolean) {
@@ -75,21 +91,7 @@ export function rosterSegmentError(segments: RosterSegment[]) {
   const intervals = segments
     .map((segment) => [rosterMinutes(segment.start, segment.startNextDay), rosterMinutes(segment.end, segment.endNextDay)])
     .sort(([first], [second]) => first - second)
-  if (intervals[0][0] >= dayMinutes) return "第一段班次須從出勤歸屬日開始。"
   if (intervals.some(([start, end], index) => end <= start || (index > 0 && start < intervals[index - 1][1]))) {
     return "請確認各時段起訖、是否為次日，以及時段有無重疊。"
   }
-}
-
-function shiftTime(date: string, time: string, nextDay: boolean) {
-  const startOfDay = new Date(date + "T00:00:00+08:00").getTime()
-  return new Date(startOfDay + rosterMinutes(time, nextDay) * 60000).toISOString()
-}
-
-export function rosterIntervals(dates: string[], segments: RosterSegment[]) {
-  return dates.flatMap((date) => segments.map((segment) => ({
-    work_date: date,
-    starts_at: shiftTime(date, segment.start, segment.startNextDay),
-    ends_at: shiftTime(date, segment.end, segment.endNextDay),
-  }))).sort((first, second) => first.starts_at.localeCompare(second.starts_at))
 }
