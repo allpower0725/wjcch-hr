@@ -5,7 +5,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react"
 import type { RosterPerson } from "../lib/roster-db"
 import {
   concurrentStaffing, dateWeekday, dayMinutes, durationLabel, monthDates, offsetDate, rangeLabel, rosterDateLabel,
-  rosterEntrySummary, rosterHours, shortRosterDate, weekDates, workWindow, type MinuteRange, type RosterDays,
+  rosterEntrySummary, rosterHours, segmentRanges, shortRosterDate, weekDates, workWindow, type MinuteRange, type RosterDays,
 } from "../lib/roster-calendar"
 import { validRosterDate, type RosterShiftType } from "../lib/roster-draft"
 import panel from "./roster-workspace.module.css"
@@ -131,10 +131,17 @@ export function RosterDateDetails({ date, people, days, shifts, weekly, draftAva
       <ul className={styles.detailList}>
         {people.map((person) => {
           const entry = days.get(person.employeeId)?.get(date)
+          const compactSummary = entry?.kind === "work" && entry.segments.length > 1
+            ? `${entry.code} ${segmentRanges(entry.segments).map(rangeLabel).join("/")}` : undefined
           return (
             <li key={person.employeeId}>
               <div><strong>{person.name}</strong>{person.jobTitle && <span>{person.jobTitle}</span>}</div>
-              {draftAvailable && <span>{rosterEntrySummary(entry, shifts)}</span>}
+              {draftAvailable && (
+                <span>
+                  <span className={compactSummary ? styles.fullShiftSummary : undefined}>{rosterEntrySummary(entry, shifts)}</span>
+                  {compactSummary && <span className={styles.compactShiftSummary} aria-hidden="true">{compactSummary}</span>}
+                </span>
+              )}
               {entry?.note && <p className={styles.rosterNote}>{entry.note}</p>}
             </li>
           )
