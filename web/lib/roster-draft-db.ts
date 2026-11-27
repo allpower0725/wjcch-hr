@@ -1,7 +1,7 @@
 import "server-only"
 
 import type { Pool, PoolClient } from "pg"
-import { rosterPool, rosterSessionHash, rosterWorkspaceParams, type RosterMode, type RosterWorkspace } from "./roster-db"
+import { rosterPool, rosterSessionHash, rosterWorkspaceParams, type RosterDraftMode, type RosterWorkspace } from "./roster-db"
 import { rosterIntervals, rosterSegmentError, type RosterDraft, type RosterEdit } from "./roster-draft"
 import { rosterWorkspaceQuery } from "./roster-queries"
 
@@ -14,8 +14,8 @@ async function draftsAvailable(db: Pool | PoolClient) {
   return state.available
 }
 
-export async function readRosterDraft(mode: RosterMode, employeeNo: string, unitId: number, month: string) {
-  const hash = await rosterSessionHash()
+export async function readRosterDraft(mode: RosterDraftMode, employeeNo: string, unitId: number, month: string) {
+  const hash = await rosterSessionHash(mode)
   if (!hash) return
   const database = rosterPool(mode)
   if (!await draftsAvailable(database)) return
@@ -62,8 +62,8 @@ export async function readRosterDraft(mode: RosterMode, employeeNo: string, unit
 type SaveResult = { revision: number } | { status: number; error: string }
 const stale = { status: 409, error: "這個月的草稿已更新。請重新載入班表，再核對要儲存的日期。" }
 
-export async function saveRosterDraft(mode: RosterMode, employeeNo: string, edit: RosterEdit): Promise<SaveResult> {
-  const hash = await rosterSessionHash()
+export async function saveRosterDraft(mode: RosterDraftMode, employeeNo: string, edit: RosterEdit): Promise<SaveResult> {
+  const hash = await rosterSessionHash(mode)
   if (!hash) return { status: 401, error: "請重新登入。" }
   const intervals = edit.entry?.kind === "work" ? rosterIntervals(edit.dates, edit.entry.segments) : []
   const error = edit.entry?.kind === "work" && rosterSegmentError(edit.entry.segments)

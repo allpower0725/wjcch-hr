@@ -5,7 +5,7 @@ import { LiffVerification } from "../../components/liff-verification"
 import { HostedLiffLanding, LineEntry } from "../../components/portal"
 import { AppShell } from "../../components/shell"
 import { featureForPath } from "../../lib/features"
-import { lineTestMode } from "../../lib/line-test-db"
+import { isLinePilot, lineTestMode } from "../../lib/line-test-db"
 import { localLineTunnelOrigin } from "../../lib/prototype-host"
 
 export const metadata: Metadata = {
@@ -28,7 +28,7 @@ export default async function LiffPage({ searchParams }: PageProps<"/liff">) {
     <AppShell hosted>
       <main id="main-content" tabIndex={-1} className="site-width binding-layout">
         <LiffVerification liffId={liffId} binding={!!mode}
-          tunnel={mode === "tunnel"} pilot={mode === "pilot"} scenario={scenario} returnTo={feature ? `/${feature.slug}` : "/"} />
+          tunnel={mode === "tunnel"} pilot={isLinePilot(mode)} scenario={scenario} returnTo={feature ? `/${feature.slug}` : "/"} />
       </main>
     </AppShell>
   )

@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server"
 import { beginVerifiedLineBinding, bindingError, lineCookieOptions, lineResult as result } from "../../../../lib/line-binding-response"
 import {
-  confirmLineTest, endLineTest, lineTestPending, lineTestSession, lineWebTokenHash,
+  confirmLineTest, endLineTest, isLinePilot, lineCookieNames, lineWebTokenHash,
   lineTestMode, matchLineTest, newLineWebToken,
 } from "../../../../lib/line-test-db"
 import { localLineTestSubject } from "../../../../lib/line-test-scenarios"
@@ -25,8 +25,9 @@ export async function POST(request: NextRequest) {
   if (!input || typeof input !== "object" || !("action" in input)) return result({}, 400)
 
   const cookieOptions = lineCookieOptions(request, mode)
-  const loginHash = lineWebTokenHash(request.cookies.get(lineTestSession)?.value)
-  const pendingHash = lineWebTokenHash(request.cookies.get(lineTestPending)?.value)
+  const names = lineCookieNames(mode)
+  const loginHash = lineWebTokenHash(request.cookies.get(names.session)?.value)
+  const pendingHash = lineWebTokenHash(request.cookies.get(names.binding)?.value)
   const destination = safeReturnPath("returnTo" in input ? input.returnTo : undefined)
 
   try {
@@ -41,9 +42,10 @@ export async function POST(request: NextRequest) {
         if (!pendingHash) return bindingError("expired")
         const id = "documentNo" in input && typeof input.documentNo === "string" && input.documentNo.trim().toUpperCase()
         const birthDate = "birthDate" in input ? input.birthDate : undefined
-        const documentPattern = mode === "pilot" ? /^[A-Z][A-Z0-9][0-9]{8}$/ : /^Z0[0-9]{8}$/
+        const pilot = isLinePilot(mode)
+        const documentPattern = pilot ? /^[A-Z][A-Z0-9][0-9]{8}$/ : /^Z0[0-9]{8}$/
         if (!id || !documentPattern.test(id) || !validDate(birthDate)) {
-          return result({ error: mode === "pilot" ? "請核對證件號碼格式與西元出生日期。" : "請輸入有效的合成證件號碼與西元出生日期。" }, 400)
+          return result({ error: pilot ? "請核對證件號碼格式與西元出生日期。" : "請輸入有效的合成證件號碼與西元出生日期。" }, 400)
         }
         const report = await matchLineTest(mode, pendingHash, id, birthDate)
         if (report?.outcome !== "matched") return bindingError(report?.outcome, report?.attempts_remaining)
@@ -56,18 +58,18 @@ export async function POST(request: NextRequest) {
         if (report?.outcome !== "authenticated") return bindingError(report?.outcome)
 
         const response = result({ destination })
-        response.cookies.set(lineTestPending, "", { ...cookieOptions, maxAge: 0 })
-        response.cookies.set(lineTestSession, token.value, { ...cookieOptions, maxAge: sessionSeconds })
+        response.cookies.set(names.binding, "", { ...cookieOptions, maxAge: 0 })
+        response.cookies.set(names.session, token.value, { ...cookieOptions, maxAge: sessionSeconds })
         return response
       }
       case "cancel":
       case "logout": {
         await endLineTest(mode, pendingHash)
         const response = result({ destination: "/" })
-        response.cookies.set(lineTestPending, "", { ...cookieOptions, maxAge: 0 })
+        response.cookies.set(names.binding, "", { ...cookieOptions, maxAge: 0 })
         if (input.action === "logout") {
           await endLineTest(mode, loginHash)
-          response.cookies.set(lineTestSession, "", { ...cookieOptions, maxAge: 0 })
+          response.cookies.set(names.session, "", { ...cookieOptions, maxAge: 0 })
         }
         return response
       }

@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { currentLineTestIdentity, lineTestMode } from "../../../../lib/line-test-db"
 import { saveRosterDraft } from "../../../../lib/roster-draft-db"
-import { isRosterMode } from "../../../../lib/roster-db"
+import { isRosterDraftMode } from "../../../../lib/roster-db"
 import { parseRosterEdit } from "../../../../lib/roster-draft"
 
 export async function POST(request: NextRequest) {
   const mode = lineTestMode(request.headers)
-  if (!isRosterMode(mode)) return NextResponse.json({}, { status: 404 })
+  if (!isRosterDraftMode(mode)) return NextResponse.json({}, { status: 404 })
   const host = request.headers.get("host")
   const protocol = mode === "local" ? request.nextUrl.protocol : "https:"
   if (request.headers.get("origin") !== `${protocol}//${host}`) {

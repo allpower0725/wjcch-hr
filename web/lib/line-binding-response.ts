@@ -1,7 +1,7 @@
 import "server-only"
 
 import { NextRequest, NextResponse } from "next/server"
-import { endLineTest, lineTestPending, lineTestSession, lineWebTokenHash, newLineWebToken, openLineTest, type LineTestMode } from "./line-test-db"
+import { endLineTest, lineCookieNames, lineWebTokenHash, newLineWebToken, openLineTest, type LineTestMode } from "./line-test-db"
 import { safeReturnPath } from "./prototype-auth"
 
 export function lineResult(data: object, status = 200) {
@@ -32,20 +32,21 @@ export async function beginVerifiedLineBinding(request: NextRequest, mode: LineT
     return bindingError(report?.outcome)
   }
 
-  const pendingHash = lineWebTokenHash(request.cookies.get(lineTestPending)?.value)
-  const loginHash = lineWebTokenHash(request.cookies.get(lineTestSession)?.value)
+  const names = lineCookieNames(mode)
+  const pendingHash = lineWebTokenHash(request.cookies.get(names.binding)?.value)
+  const loginHash = lineWebTokenHash(request.cookies.get(names.session)?.value)
   await endLineTest(mode, pendingHash)
   await endLineTest(mode, loginHash)
   const cookieOptions = lineCookieOptions(request, mode)
   if (report.outcome === "authenticated") {
     const response = lineResult({ destination: safeReturnPath(returnTo) })
-    response.cookies.set(lineTestPending, "", { ...cookieOptions, maxAge: 0 })
-    response.cookies.set(lineTestSession, token.value, { ...cookieOptions, expires: report.deadline })
+    response.cookies.set(names.binding, "", { ...cookieOptions, maxAge: 0 })
+    response.cookies.set(names.session, token.value, { ...cookieOptions, expires: report.deadline })
     return response
   }
 
   const response = lineResult({ needsBinding: true, remainingAttempts: report.attempts_remaining })
-  response.cookies.set(lineTestSession, "", { ...cookieOptions, maxAge: 0 })
-  response.cookies.set(lineTestPending, token.value, { ...cookieOptions, expires: report.deadline })
+  response.cookies.set(names.session, "", { ...cookieOptions, maxAge: 0 })
+  response.cookies.set(names.binding, token.value, { ...cookieOptions, expires: report.deadline })
   return response
 }

@@ -8,11 +8,10 @@ import { LogoutButton } from "../../components/auth-client"
 import { PortalLink } from "../../components/loading-state"
 import { PortalEntry } from "../../components/portal"
 import { RosterDraftEditor } from "../../components/roster-draft-editor"
-import { RosterUnitSelect } from "../../components/roster-unit-select"
 import { AppShell } from "../../components/shell"
 import { rosterFeature } from "../../lib/features"
 import { currentLineTestIdentity, lineTestMode } from "../../lib/line-test-db"
-import { isRosterMode, readRosterWorkspace } from "../../lib/roster-db"
+import { isRosterDraftMode, isRosterMode, readRosterWorkspace } from "../../lib/roster-db"
 import { readRosterDraft } from "../../lib/roster-draft-db"
 import { taipeiDate, validRosterDate, validRosterMonth } from "../../lib/roster-draft"
 import styles from "../../components/roster-workspace.module.css"
@@ -47,7 +46,8 @@ export default async function RosterPage({ searchParams }: PageProps<"/roster">)
     : today.startsWith(month + "-") ? today : month + "-01"
   const initialView = view === "edit" || view === "week" ? view : "month"
   const initialPerson = typeof person === "string" && /^[1-9][0-9]{0,9}$/.test(person) ? Number(person) : undefined
-  const draft = selected ? await readRosterDraft(mode, identity.employee.employeeNo, selected.id, month) : undefined
+  const draft = selected && isRosterDraftMode(mode)
+    ? await readRosterDraft(mode, identity.employee.employeeNo, selected.id, month) : undefined
   const back = (
     <Button className={styles.back} render={<PortalLink href="/" />} aria-label="返回工作台">
       <ArrowLeft size={22} aria-hidden="true" />

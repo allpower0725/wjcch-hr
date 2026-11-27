@@ -5,12 +5,21 @@ import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { cookies } from "next/headers"
 import { Pool, type QueryResultRow } from "pg"
+import { cloudPilotEnabled, isApprovedCloudPilotSubject, queryCloudPilot } from "./cloud-pilot-db"
 import { linePilotQueries } from "./line-pilot-queries"
 import { isLocalPrototypeHost, localLineTunnelOrigin } from "./prototype-host"
 
-export const lineTestSession = "hr_line_test_session"
-export const lineTestPending = "hr_line_test_binding"
-export type LineTestMode = "local" | "tunnel" | "cloud" | "pilot"
+export type LineTestMode = "local" | "tunnel" | "cloud" | "pilot" | "cloud-pilot"
+
+export function lineCookieNames(mode: LineTestMode) {
+  return mode === "cloud-pilot"
+    ? { session: "__Host-hr_line_pilot_session", binding: "__Host-hr_line_pilot_binding" }
+    : { session: "hr_line_test_session", binding: "hr_line_test_binding" }
+}
+
+export function isLinePilot(mode: LineTestMode | undefined) {
+  return mode === "pilot" || mode === "cloud-pilot"
+}
 
 const cloudHost = "wjcch-hr-liff-test.vercel.app"
 const cloudDatabase = "HR_LINE_CLOUD_TEST_DATABASE_URL"
@@ -26,6 +35,7 @@ export function localLineTestEnabled(host: string | null) {
 export function lineTestMode(headers: Pick<Headers, "get">): LineTestMode | undefined {
   const host = headers.get("host")
   if (localLineTestEnabled(host)) return "local"
+  if (cloudPilotEnabled(host)) return "cloud-pilot"
   if (host === cloudHost && process.env.VERCEL === "1" && process.env[cloudDatabase]) return "cloud"
   if (host && localLineTunnelOrigin() === `https://${host}`
     && headers.get("x-forwarded-proto")?.split(",").at(-1)?.trim() === "https") {
@@ -33,7 +43,9 @@ export function lineTestMode(headers: Pick<Headers, "get">): LineTestMode | unde
   }
 }
 
-function makePool(mode: LineTestMode) {
+type ExistingLineMode = Exclude<LineTestMode, "cloud-pilot">
+
+function makePool(mode: ExistingLineMode) {
   const options = { max: 3, connectionTimeoutMillis: 4000, statement_timeout: 5000 }
   if (mode === "cloud") {
     const config = new URL(process.env[cloudDatabase] ?? "")
@@ -58,14 +70,14 @@ function makePool(mode: LineTestMode) {
   }).on("error", () => { console.error("Local LINE test database connection interrupted") })
 }
 
-const shared = globalThis as typeof globalThis & { hrLineTestPools?: Partial<Record<LineTestMode, Pool>> }
+const shared = globalThis as typeof globalThis & { hrLineTestPools?: Partial<Record<ExistingLineMode, Pool>> }
 
 type EmployeeRow = { employee_no: string; employee_name: string; department: string }
 type IdentityRow = EmployeeRow & { is_admin?: boolean }
 type BindingRow = { outcome: string; deadline: Date | null; attempts_remaining: number | null }
 type MatchRow = BindingRow & Partial<EmployeeRow>
 
-async function query<T extends QueryResultRow>(mode: LineTestMode, sql: string, params: unknown[]) {
+async function query<T extends QueryResultRow>(mode: ExistingLineMode, sql: string, params: unknown[]) {
   const pools = shared.hrLineTestPools ??= {}
   const pool = pools[mode] ??= makePool(mode)
   return (await pool.query<T>(sql, params)).rows[0] as T | undefined
@@ -91,6 +103,11 @@ export function lineWebTokenHash(value: string | undefined) {
 }
 
 export async function openLineTest(mode: LineTestMode, subject: string, hash: Buffer) {
+  if (mode === "cloud-pilot") {
+    if (!isApprovedCloudPilotSubject(subject)) return { outcome: "pilot_denied", deadline: null, attempts_remaining: null }
+    return await queryCloudPilot<BindingRow>("SELECT * FROM hr.line_web_pilot_begin($1, $2)", [subject, hash])
+      ?? { outcome: "ineligible", deadline: null, attempts_remaining: null }
+  }
   if (mode === "pilot") {
     const approved = await pilotSubject()
     if (subject !== approved) return { outcome: "pilot_denied", deadline: null, attempts_remaining: null }
@@ -101,6 +118,10 @@ export async function openLineTest(mode: LineTestMode, subject: string, hash: Bu
 }
 
 export async function matchLineTest(mode: LineTestMode, hash: Buffer, documentNo: string, birthDate: string): Promise<MatchRow | undefined> {
+  if (mode === "cloud-pilot") {
+    return await queryCloudPilot<MatchRow>("SELECT * FROM hr.line_web_pilot_match($1, $2, $3::date)", [hash, documentNo, birthDate])
+      ?? { outcome: "expired", deadline: null, attempts_remaining: null }
+  }
   if (mode === "pilot") {
     return await pilotQuery<MatchRow>(linePilotQueries.match, [hash, documentNo, birthDate])
       ?? { outcome: "expired", deadline: null, attempts_remaining: null }
@@ -109,6 +130,10 @@ export async function matchLineTest(mode: LineTestMode, hash: Buffer, documentNo
 }
 
 export async function confirmLineTest(mode: LineTestMode, pendingHash: Buffer, loginHash: Buffer) {
+  if (mode === "cloud-pilot") {
+    return await queryCloudPilot<{ outcome: string }>("SELECT hr.line_web_pilot_confirm($1, $2) AS outcome", [pendingHash, loginHash])
+      ?? { outcome: "expired" }
+  }
   if (mode === "pilot") {
     return await pilotQuery<{ outcome: string }>(linePilotQueries.confirm, [pendingHash, loginHash]) ?? { outcome: "expired" }
   }
@@ -117,19 +142,21 @@ export async function confirmLineTest(mode: LineTestMode, pendingHash: Buffer, l
 
 export async function endLineTest(mode: LineTestMode, hash: Buffer | undefined) {
   if (!hash) return
-  if (mode === "pilot") await pilotQuery(linePilotQueries.end, [hash])
+  if (mode === "cloud-pilot") await queryCloudPilot("SELECT hr.line_web_pilot_end($1)", [hash])
+  else if (mode === "pilot") await pilotQuery(linePilotQueries.end, [hash])
   else await query(mode, "SELECT hr.line_web_test_end($1)", [hash])
 }
 
 export async function currentLineTestIdentity(mode: LineTestMode) {
-  const hash = lineWebTokenHash((await cookies()).get(lineTestSession)?.value)
+  const hash = lineWebTokenHash((await cookies()).get(lineCookieNames(mode).session)?.value)
   if (!hash) return
-  const employee = mode === "pilot" ? await pilotQuery<IdentityRow>(linePilotQueries.identity, [hash])
+  const employee = mode === "cloud-pilot" ? await queryCloudPilot<IdentityRow>("SELECT * FROM hr.line_web_pilot_identity($1)", [hash])
+    : mode === "pilot" ? await pilotQuery<IdentityRow>(linePilotQueries.identity, [hash])
     : await query<IdentityRow>(mode, mode === "local"
       ? "SELECT i.*, hr.line_web_local_admin_status($1) AS is_admin FROM hr.line_web_test_identity($1) AS i"
       : "SELECT * FROM hr.line_web_test_identity($1)", [hash])
   if (!employee) return
-  const isAdmin = (mode === "pilot" || mode === "local") && employee.is_admin === true
+  const isAdmin = employee.is_admin === true
 
   return { employee: {
     employeeNo: employee.employee_no, name: employee.employee_name, department: employee.department,

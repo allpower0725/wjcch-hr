@@ -92,7 +92,17 @@ if ($tunnel.Name -eq 'ngrok.exe' -and $tunnel.CommandLine -match '127\.0\.0\.1:3
 2. 在手機登出，再從桌機的本機 HTTPS 入口使用同一個 LINE 帳號登入。兩端應顯示相同員編，登入時會略過首次比對。
 3. 結束驗收後，可停止 3101 服務。若要回到合成資料模式，先移除 `HR_LINE_PILOT`，再啟動原先的隧道版本。
 
-## 雲端 LIFF 測試與正式串接
+## Vercel 正式名冊驗收
+
+Vercel 專案 `web` 以 `web/` 為建置目錄。[開發用 LIFF Endpoint](https://web-three-coral-4cwibhtp88.vercel.app/liff) 與 [班表入口](https://web-three-coral-4cwibhtp88.vercel.app/roster) 共用既有 LINE 驗證。啟用後，獲准的 LINE 帳號首次登入須重新比對正式員工資料並確認 P271 綁定。完成後，由維護端核對有效綁定並新增初始管理者授權。
+
+Vercel 專案的 Production 環境設定 `HR_LINE_PILOT_HOST`、`LINE_LIFF_ID` 和 `LINE_LOGIN_CHANNEL_ID`，並將 `HR_LINE_PILOT_SUBJECT_SHA256`、`HR_LINE_PILOT_DATABASE_URL` 和 `HR_LINE_PILOT_DATABASE_CA` 設為伺服器端設定。其中資料庫 URL 使用正式 Supabase 的交易連線池以及專用角色 `hr_web_pilot`，憑證驗證保持啟用。網頁與 LINE 都使用相同域名和短效登入 Cookie。Preview 部署與其他主機名稱不會啟用正式名冊。
+
+正式庫維護時，只套用已核准的 LINE 綁定與管理者授權兩支 migration，逐支核對並登錄 `db_migrations.hr`。`database/tools/render-line-web-pilot.cjs` 以允許登入的 LINE 使用者 ID 的 SHA-256 指紋產生同一套登入限制與名冊查詢 SQL，使用 Node.js 24 執行。角色僅能執行已核准的六個函式。名冊驗收環境的班表為唯讀，正式班表草稿 migration 另行確認。
+
+若須停止驗收，撤銷專用資料庫角色的登入與函式權限，撤除 Vercel 的正式名冊設定並回復部署。撤銷 P271 的驗收授權時保留授權歷史。
+
+## 先前的雲端 LIFF 合成資料測試
 
 Vercel 的 `wjcch-hr-liff-test` 是前期使用的獨立測試專案，以下保留歷史驗收方式。當開發用 LIFF 的 Endpoint 設為 [Vercel HTTPS 入口](https://wjcch-hr-liff-test.vercel.app/liff) 時，使用 LINE 開發頻道的管理員或測試者帳號驗收。兩端使用同一 LINE 帳號時，完成一次綁定後都應顯示相同的合成員工帳號。
 
