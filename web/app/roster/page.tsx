@@ -13,6 +13,8 @@ import { rosterFeature } from "../../lib/features"
 import { currentLineTestIdentity, lineTestMode } from "../../lib/line-test-db"
 import { canUseRosterDrafts, isRosterMode, readRosterWorkspace } from "../../lib/roster-db"
 import { readRosterDraft } from "../../lib/roster-draft-db"
+import type { ApprovalState } from "../../lib/roster-approval"
+import { rosterApproval } from "../../lib/roster-approval-db"
 import { taipeiDate, validRosterDate, validRosterMonth } from "../../lib/roster-draft"
 import styles from "../../components/roster-workspace.module.css"
 
@@ -46,8 +48,13 @@ export default async function RosterPage({ searchParams }: PageProps<"/roster">)
     : today.startsWith(month + "-") ? today : month + "-01"
   const initialView = view === "edit" || view === "week" ? view : "month"
   const initialPerson = typeof person === "string" && /^[1-9][0-9]{0,9}$/.test(person) ? Number(person) : undefined
-  const draft = selected && canUseRosterDrafts(mode)
-    ? await readRosterDraft(mode, identity.employee.employeeNo, selected.id, month) : undefined
+  const [draft, result] = selected && canUseRosterDrafts(mode)
+    ? await Promise.all([
+      readRosterDraft(mode, identity.employee.employeeNo, selected.id, month),
+      rosterApproval<ApprovalState>(mode, { action: "state", unitId: selected.id, month }, identity.employee.employeeNo)
+        .catch(() => ({ status: 503, error: "暫時無法讀取班表送出進度。" })),
+    ]) : []
+  const approval = result && !("error" in result) ? result : undefined
   const back = (
     <Button className={styles.back} render={<PortalLink href="/" />} aria-label="返回工作台">
       <ArrowLeft size={22} aria-hidden="true" />
@@ -59,8 +66,10 @@ export default async function RosterPage({ searchParams }: PageProps<"/roster">)
       <AnimatedMain className={`site-width workspace ${styles.page}`} scene="feature">
         <div className={styles.workspace} data-reveal>
           {selected ? (
-            <RosterDraftEditor key={`${selected.id}/${month}/${initialDate}`} unit={selected} units={roster.units}
-              month={month} back={back} people={roster.people} viewerId={roster.viewerId} draft={draft}
+            <RosterDraftEditor key={`${selected.id}/${month}/${initialDate}`}
+              unit={selected} units={roster.units} month={month} back={back} people={roster.people}
+              viewerId={roster.viewerId} draft={draft} approval={approval}
+              approvalError={result && "error" in result ? result.error : undefined}
               initialDate={initialDate} initialView={initialView} initialPerson={initialPerson} />
           ) : <>
             <header className={styles.pageHeader}>{back}<h1 className={styles.title}>月班表編輯</h1></header>

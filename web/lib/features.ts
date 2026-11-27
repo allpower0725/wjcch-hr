@@ -11,6 +11,10 @@ export const rosterFeature = {
   slug: "roster", title: "班表編輯", description: "選擇排班單位與人員", icon: "calendar", group: "personal",
 } as const
 
+export const rosterApprovalFeature = {
+  slug: "roster/approvals", title: "主管簽核", description: "處理送出的班表", icon: "clipboard", group: "personal",
+} as const
+
 export const features = [
   { slug: "attendance", title: "我的打卡紀錄", description: "查看個人上下班的打卡時間", icon: "clock", group: "personal" },
   { slug: "schedule", title: "我的班表", description: "查看已生效的出勤安排", icon: "calendar", group: "personal" },
@@ -22,9 +26,10 @@ export const features = [
   { slug: "line-management", title: "LINE 綁定管理", description: "管理員工的 LINE 綁定", icon: "link", group: "admin" },
 ] as const
 
-export type Feature = (typeof features)[number]
+export type Feature = (typeof features)[number] | typeof rosterApprovalFeature
 
 export function featureForPath(path: string) {
+  if (path === "/roster/approvals") return rosterApprovalFeature
   return features.find((feature) => path === `/${feature.slug}`)
 }
 

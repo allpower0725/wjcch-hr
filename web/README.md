@@ -104,6 +104,10 @@ Vercel 專案的 Production 環境設定 `HR_LINE_PILOT_HOST`、`LINE_LIFF_ID` �
 
 Vercel Production 設定 `HR_ROSTER_CLOUD_DRAFTS=1` 後可從班表頁儲存草稿。要回復名冊唯讀，移除該設定並重新部署，或切回先前的唯讀部署，再撤銷 `hr_web_pilot` 對 `hr.roster_web_pilot_draft_read`、`hr.roster_web_pilot_draft_save` 的執行權。已儲存的草稿保留於正式庫。
 
+班表送出期限使用 `HR_ROSTER_SUBMISSION_DAY`。本機可在 `web/.env.local` 依 `.env.example` 設定，Vercel 使用同名的伺服器環境變數。預設為前月 25 日 24:00，採台北時間。逾期送出會在送出紀錄標記。
+
+部署班表簽核時，先驗證和套用 `add_roster_approvals` migration，再更新 Vercel 既有草稿函式，以及 `database/tools/roster-web-pilot-approval.sql` 的簽核入口。若要回復，先暫停草稿與簽核寫入，再切到前版部署並保留版本、案件與操作紀錄。
+
 若須停止驗收，撤銷專用資料庫角色的登入與函式權限，撤除 Vercel 的正式名冊設定並回復部署。撤銷 P271 的驗收授權時保留授權歷史。
 
 ## 先前的雲端 LIFF 合成資料測試

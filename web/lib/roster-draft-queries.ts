@@ -4,8 +4,12 @@ export function rosterDraftQuery(scope: string, unit: string, month: string) {
     selected AS (
       SELECT scope."selectedUnitId" AS department_id, v.revision
       FROM scope
-      LEFT JOIN hr.roster_version AS v
-        ON v.department_id = scope."selectedUnitId" AND v.month_start = ${month} AND v.status = 'draft'
+      LEFT JOIN LATERAL (
+        SELECT revision FROM hr.roster_version
+        WHERE department_id = scope."selectedUnitId" AND month_start = ${month}
+          AND status IN ('draft','submitted','effective')
+        ORDER BY (status IN ('draft','submitted')) DESC LIMIT 1
+      ) AS v ON true
       WHERE scope."selectedUnitId" = ${unit}
     )
     SELECT COALESCE(selected.revision, 0) AS revision, COALESCE((
@@ -27,7 +31,12 @@ export function rosterDraftQuery(scope: string, unit: string, month: string) {
       ) ORDER BY d.work_date)
       FROM hr.roster_day AS d
       JOIN hr.roster_version AS v USING (version_id)
-      WHERE v.department_id = selected.department_id AND v.status = 'draft'
+      WHERE v.department_id = selected.department_id AND v.status IN ('draft','submitted','effective')
+        AND (v.status <> 'effective' OR NOT EXISTS (
+          SELECT 1 FROM hr.roster_version AS open_version
+          WHERE open_version.department_id = v.department_id AND open_version.month_start = v.month_start
+            AND open_version.status IN ('draft','submitted')
+        ))
         AND d.work_date >= ${month}::date - 7
         AND d.work_date < (${month}::date + interval '1 month')::date + 7
         AND EXISTS (

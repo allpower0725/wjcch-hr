@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectGroup, SelectGroupLabel, SelectItem, Selec
 import { ArrowRight, CalendarDays, CalendarPlus, Check, ChevronDown, ChevronLeft, ChevronRight,
   CircleAlert, Eraser, Plus, Save, Trash2, X } from "lucide-react"
 import type { RosterPerson, RosterUnit } from "../lib/roster-db"
+import type { ApprovalState } from "../lib/roster-approval"
 import {
   dateWeekday, dayMinutes, durationLabel, groupRosterDays, monthDates, offsetDate, offsetMonth, paidRosterRanges,
   presetSegments, rangeLabel, rosterDateLabel, rosterEntrySummary, rosterHours, rosterShiftTitle, segmentRanges,
@@ -24,6 +25,7 @@ import {
 import { rosterNoteLimit, rosterSegmentIssue, validRosterDate, validRosterMonth, type RosterDraft, type RosterEntry,
   type RosterSegment, type RosterShiftType } from "../lib/roster-draft"
 import { LoadingFeedback, LoadingProvider } from "./loading-state"
+import { RosterApprovalFooter } from "./roster-approval-actions"
 import { RosterDateDetails, RosterMonthlyHours, RosterTimeTrack, RosterWeek } from "./roster-overview"
 import { RosterUnitSelect } from "./roster-unit-select"
 import panel from "./roster-workspace.module.css"
@@ -36,7 +38,7 @@ const blankSegment: RosterSegment = { start: "", end: "", startNextDay: false, e
 const emptyDraft: RosterDraft = { revision: 0, days: [], shifts: [] }
 const shiftBadges: Record<string, string> = { R: "例", L: "假", OFF: "休", X: "自" }
 
-export function RosterDraftEditor({ unit, units, month, back, people, viewerId, draft, initialView, initialDate, initialPerson }: {
+export function RosterDraftEditor({ unit, units, month, back, people, viewerId, draft, approval, approvalError, initialView, initialDate, initialPerson }: {
   unit: RosterUnit
   units: RosterUnit[]
   month: string
@@ -44,6 +46,8 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
   people: RosterPerson[]
   viewerId: number
   draft?: RosterDraft
+  approval?: ApprovalState
+  approvalError?: string
   initialView: RosterView
   initialDate: string
   initialPerson?: number
@@ -63,6 +67,7 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
   const [batchDates, setBatchDates] = useState<string[]>([])
   const [editorDates, setEditorDates] = useState<string[]>([])
   const [current, setCurrent] = useState(draft ?? emptyDraft)
+  const [versionId, setVersionId] = useState(approval?.versionId)
   const [dirty, setDirty] = useState(false)
   const [writeMessage, setWriteMessage] = useState<string>()
   const writeInFlight = useRef(false)
@@ -74,9 +79,15 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
   const personDays = employee ? grouped.get(employee.employeeId) : undefined
   const monthDays = monthDates(month)
   const editMode = view === "edit"
+  const editable = Boolean(draft && approval?.status === "draft")
   const weekly = view === "week"
   const initialShift = batch ? undefined : personDays?.get(editorDates[0])
   const filled = current.days.filter((day) => day.date.startsWith(month + "-") && (!editMode || day.employeeId === employeeId)).length
+
+  if (versionId !== approval?.versionId) {
+    setVersionId(approval?.versionId)
+    setCurrent(draft ?? emptyDraft)
+  }
 
   function stopBatch() {
     setBatch(null)
@@ -124,7 +135,7 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
     if (!editMode) navigate(value)
     else if (value.startsWith(month + "-") && employee) {
       setActiveDate(value)
-      if (draft) openEditor([value])
+      if (editable) openEditor([value])
     }
   }
 
@@ -176,7 +187,7 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
     }
   }
 
-  const datesValue = batch ? batchDates : editMode && draft ? null : activeDate
+  const datesValue = batch ? batchDates : editMode && editable ? null : activeDate
   const monthPrevious = offsetMonth(month, -1)
   const monthNext = offsetMonth(month, 1)
 
@@ -264,13 +275,15 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
                   </SelectContent>
                 </Select>
               </div>
-              {draft && <div className={styles.batchTools}>
+              {editable && <div className={styles.batchTools}>
                 {batch ? <Button className={styles.secondary} onClick={stopBatch}>結束批次{batch === "add" ? "新增" : "刪除"}</Button> : <>
                   <BatchGuide kind="add" disabled={!employee} start={() => setBatch("add")} />
                   <BatchGuide kind="delete" disabled={!employee} start={() => setBatch("delete")} />
                 </>}
               </div>}
-              <p className={styles.personProgress}>{draft ? `${filled}/${monthDays.length} 日已填 · 點日期編輯` : "草稿儲存尚未啟用"}</p>
+              <p className={styles.personProgress}>{draft
+                ? `${filled}/${monthDays.length} 日已填 · ${editable ? "點日期編輯" : "唯讀"}`
+                : "草稿儲存尚未啟用"}</p>
             </div>
           )}
           {weekly ? <RosterWeek date={activeDate} people={people} days={grouped} shifts={current.shifts}
@@ -293,7 +306,7 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
                         {Number(cell.date.slice(8))}
                         {editMode ? <>
                           <span className={styles.dayBadge} data-kind={entry?.kind ?? "empty"} data-shift={entry?.code}>
-                            {entry ? shiftBadges[entry.code] ?? entry.code : draft ? "＋" : "—"}
+                            {entry ? shiftBadges[entry.code] ?? entry.code : editable ? "＋" : "—"}
                           </span>
                           {!batch && entry?.kind === "work" && <span className={styles.dayTimes}>{segmentRanges(entry.segments).map(rangeLabel).join("、")}</span>}
                         </> : <>
@@ -355,6 +368,10 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
         </section>
         {!editMode && <RosterDateDetails date={activeDate} people={people} days={grouped} shifts={current.shifts} weekly={weekly} draftAvailable={!!draft} />}
       </div>
+      {editMode && approval && <RosterApprovalFooter approval={approval} unitId={unit.id} month={month}
+        revision={current.revision} hasEntries={current.days.some((day) => day.date.startsWith(month + "-"))}
+        disabled={monthPending || saving} />}
+      {editMode && approvalError && <p className="notice error" role="alert">{approvalError}</p>}
       <Dialog open={editorDates.length > 0} presentation="auto" dismissible={!dirty && !saving}
         onDismissAttempt={() => {
           if (!saving) setDismissMessage("有未儲存的變更。請儲存，或使用「放棄變更」。")
