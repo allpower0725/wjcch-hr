@@ -170,7 +170,7 @@ export function RosterMonthlyHours({ month, unitName, people, days }: {
       <DialogTrigger render={<Button />} className={styles.secondary}>月結時數</DialogTrigger>
       <DialogContent className={`${styles.dialog} ${styles.summaryDialog}`}>
         <DialogTitle className={styles.dialogTitle}>月結時數</DialogTitle>
-        <DialogDescription className={styles.description}>{unitName} · {month} · 草稿排定工時</DialogDescription>
+        <DialogDescription className={styles.description}>{unitName} · {month} · 排定工時</DialogDescription>
         <table className={styles.hoursTable}>
           <thead><tr><th scope="col">人員</th><th scope="col">工作時數</th><th scope="col">加給時數</th></tr></thead>
           <tbody>{people.map((person, index) =>
