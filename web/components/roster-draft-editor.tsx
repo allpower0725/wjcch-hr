@@ -170,33 +170,8 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
         <h1 className={panel.title}>月班表編輯</h1>
         {draft && <RosterMonthlyHours month={month} unitName={unit.name} people={people} days={grouped} />}
       </header>
-      <div className={styles.controls}>
-        <div className={styles.unitControl}>
-          <RosterUnitSelect units={units} selectedId={unit.id} month={month} date={activeDate} view={view} />
-        </div>
-        <Field className={styles.monthField}>
-          <FieldLabel className={panel.label}>班表月份</FieldLabel>
-          <div className={styles.monthNav}>
-            <Button className={styles.navButton} aria-label="上個月" disabled={!validRosterMonth(monthPrevious)}
-              onClick={() => changeMonth(monthPrevious)}><ChevronLeft size={20} aria-hidden="true" /></Button>
-            <Input className={styles.monthInput} type="month" name="month" min="1000-01" max="9999-12"
-              value={monthInput} placeholder="YYYY-MM" aria-invalid={Boolean(monthIssue)}
-              aria-describedby={monthIssue ? "roster-month-error" : undefined}
-              onChange={(event) => {
-                const input = event.currentTarget
-                setMonthInput(input.value)
-                if (input.type === "month" && validRosterMonth(input.value)) changeMonth(input.value)
-              }}
-              onBlur={(event) => {
-                const input = event.currentTarget
-                if (input.type === "text" && input.value !== month || !validRosterMonth(input.value)) changeMonth(input.value)
-              }}
-              onKeyDown={(event) => { if (event.key === "Enter" && event.currentTarget.type === "text") changeMonth(event.currentTarget.value) }} />
-            <Button className={styles.navButton} aria-label="下個月" disabled={!validRosterMonth(monthNext)}
-              onClick={() => changeMonth(monthNext)}><ChevronRight size={20} aria-hidden="true" /></Button>
-          </div>
-        </Field>
-        {monthIssue && <p id="roster-month-error" className={`notice error ${styles.monthIssue}`} role="alert">{monthIssue}</p>}
+      <div className={styles.unitControl}>
+        <RosterUnitSelect units={units} selectedId={unit.id} month={month} date={activeDate} view={view} />
       </div>
       <div className={styles.surface} data-view={view}>
         <section className={panel.panel} aria-label="選擇排班日期">
@@ -210,51 +185,72 @@ export function RosterDraftEditor({ unit, units, month, back, people, viewerId, 
             <SegmentedControlItem value="edit">班表編輯</SegmentedControlItem>
           </SegmentedControl>
           <div className={styles.toolbar}>
-            {editMode ? (
-              <>
-                <div className={styles.personControl}>
-                  <Select items={people.map((person) => ({ value: String(person.employeeId), label: `${person.name} · ${person.employeeNo}` }))}
-                    value={employee ? String(employee.employeeId) : null} presentation="auto" onValueChange={(value) => {
-                      if (!value) return
-                      setEmployeeId(Number(value))
-                      setBatchDates([])
-                      setStatus("")
-                    }}>
-                    <SelectLabel className={panel.label}>排班人員</SelectLabel>
-                    <SelectTrigger className={styles.select}><SelectValue className={panel.value} /><ChevronDown size={20} aria-hidden="true" /></SelectTrigger>
-                    <SelectContent className={panel.options} sideOffset={8}>
-                      {people.map((person) => (
-                        <SelectItem key={person.employeeId} value={String(person.employeeId)} className={panel.option}>
-                          <span>{person.name} · {person.employeeNo}</span>
-                          <SelectItemIndicator className={panel.indicator}><Check size={16} aria-hidden="true" /></SelectItemIndicator>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                {draft && <div className={styles.batchTools}>
-                  {batch ? <Button className={styles.secondary} onClick={stopBatch}>結束批次{batch === "add" ? "新增" : "刪除"}</Button> : <>
-                    <BatchGuide kind="add" disabled={!employee} start={() => setBatch("add")} />
-                    <BatchGuide kind="delete" disabled={!employee} start={() => setBatch("delete")} />
-                  </>}
-                </div>}
-                <p className={styles.personProgress}>{draft ? `${filled}/${monthDays.length} 日已填 · 點日期編輯` : "正式名冊 · 草稿儲存尚未啟用"}</p>
-              </>
-            ) : (
-              <>
-                <span className={styles.toolbarHint}>{!draft ? "正式名冊" : weekly ? "週班表" : "時段 00–24 時"}</span>
-                <SegmentedControl className={`${styles.switch} ${styles.periodSwitch}`} aria-label="班表一覽期間" value={overview} onValueChange={(value) => {
-                  if (value === "month" || value === "week") {
-                    setOverview(value)
-                    setView(value)
-                  }
-                }}>
-                  <SegmentedControlItem value="month">月檢視</SegmentedControlItem>
-                  <SegmentedControlItem value="week">週檢視</SegmentedControlItem>
-                </SegmentedControl>
-              </>
+            <Field className={styles.monthField}>
+              <FieldLabel className="sr-only">班表月份</FieldLabel>
+              <div className={styles.monthNav}>
+                <Button className={styles.navButton} aria-label="上個月" disabled={!validRosterMonth(monthPrevious)}
+                  onClick={() => changeMonth(monthPrevious)}><ChevronLeft size={20} aria-hidden="true" /></Button>
+                <Input className={styles.monthInput} type="month" name="month" min="1000-01" max="9999-12"
+                  value={monthInput} placeholder="YYYY-MM" aria-invalid={Boolean(monthIssue)}
+                  aria-describedby={monthIssue ? "roster-month-error" : undefined}
+                  onChange={(event) => {
+                    const input = event.currentTarget
+                    setMonthInput(input.value)
+                    if (input.type === "month" && validRosterMonth(input.value)) changeMonth(input.value)
+                  }}
+                  onBlur={(event) => {
+                    const input = event.currentTarget
+                    if ((input.type === "text" && input.value !== month) || !validRosterMonth(input.value)) changeMonth(input.value)
+                  }}
+                  onKeyDown={(event) => { if (event.key === "Enter" && event.currentTarget.type === "text") changeMonth(event.currentTarget.value) }} />
+                <Button className={styles.navButton} aria-label="下個月" disabled={!validRosterMonth(monthNext)}
+                  onClick={() => changeMonth(monthNext)}><ChevronRight size={20} aria-hidden="true" /></Button>
+              </div>
+            </Field>
+            {!editMode && (
+              <SegmentedControl className={`${styles.switch} ${styles.periodSwitch}`} aria-label="班表一覽期間" value={overview} onValueChange={(value) => {
+                if (value === "month" || value === "week") {
+                  setOverview(value)
+                  setView(value)
+                }
+              }}>
+                <SegmentedControlItem value="month">月</SegmentedControlItem>
+                <SegmentedControlItem value="week">週</SegmentedControlItem>
+              </SegmentedControl>
             )}
+            {monthIssue && <p id="roster-month-error" className={`notice error ${styles.monthIssue}`} role="alert">{monthIssue}</p>}
           </div>
+          {editMode && (
+            <div className={styles.toolbar}>
+              <div className={styles.personControl}>
+                <Select items={people.map((person) => ({ value: String(person.employeeId), label: `${person.name} · ${person.employeeNo}` }))}
+                  value={employee ? String(employee.employeeId) : null} presentation="auto" onValueChange={(value) => {
+                    if (!value) return
+                    setEmployeeId(Number(value))
+                    setBatchDates([])
+                    setStatus("")
+                  }}>
+                  <SelectLabel className={panel.label}>排班人員</SelectLabel>
+                  <SelectTrigger className={styles.select}><SelectValue className={panel.value} /><ChevronDown size={20} aria-hidden="true" /></SelectTrigger>
+                  <SelectContent className={panel.options} sideOffset={8}>
+                    {people.map((person) => (
+                      <SelectItem key={person.employeeId} value={String(person.employeeId)} className={panel.option}>
+                        <span>{person.name} · {person.employeeNo}</span>
+                        <SelectItemIndicator className={panel.indicator}><Check size={16} aria-hidden="true" /></SelectItemIndicator>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {draft && <div className={styles.batchTools}>
+                {batch ? <Button className={styles.secondary} onClick={stopBatch}>結束批次{batch === "add" ? "新增" : "刪除"}</Button> : <>
+                  <BatchGuide kind="add" disabled={!employee} start={() => setBatch("add")} />
+                  <BatchGuide kind="delete" disabled={!employee} start={() => setBatch("delete")} />
+                </>}
+              </div>}
+              <p className={styles.personProgress}>{draft ? `${filled}/${monthDays.length} 日已填 · 點日期編輯` : "草稿儲存尚未啟用"}</p>
+            </div>
+          )}
           {weekly ? <RosterWeek date={activeDate} people={people} days={grouped} selectDate={navigate} /> : (
             <Calendar key={batch ?? view} mode={batch ? "multiple" : "single"} month={month}
               value={datesValue} locale="zh-TW" weekdayFormat="narrow" showOutsideDays={false}

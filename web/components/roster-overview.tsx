@@ -24,7 +24,7 @@ export function RosterWeek({ date, people, days, selectDate }: {
     <Button key={day} className={styles.dayLink} aria-label={rosterDateLabel(day)} aria-pressed={day === date}
       disabled={!validRosterDate(day)} onClick={() => selectDate(day)}>
       <span>{"日一二三四五六"[dateWeekday(day)]}</span>
-      <strong>{shortRosterDate(day)}</strong>
+      <span className={styles.weekDayDate}>{shortRosterDate(day)}</span>
     </Button>
   )
   return (
